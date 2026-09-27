@@ -9,7 +9,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 import { DatabaseSync } from "node:sqlite";
 import { ANSI_DIALECT, buildInsert, buildSetClause, buildWhereClause } from "./sqlDialect.js";
 import { mkdirSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { DatabaseAdapter, DatabaseResult, ColumnInfo, FieldDefinition } from "../types.js";
 import { SQLTranslator } from "../sqlTranslator.js";
 
@@ -76,31 +76,45 @@ function sqliteVersionAtLeast(major: number, minor: number, patch: number): bool
  *
  * Matches the tina4-python + tina4-php convention:
  *   ":memory:"         → passthrough
- *   "data/app.db"      → {cwd}/data/app.db  (auto-mkdir under cwd)
+ *   "data/app.db"      → {cwd}/data/app.db  (parent auto-created, mode 0775)
  *   "/abs/app.db"      → /abs/app.db        (NO auto-mkdir; user's responsibility)
- *   "C:/Users/app.db"  → C:/Users/app.db    (NO auto-mkdir)
+ *   "C:/Users/app.db"  → C:/Users/app.db    (recognised as absolute on EVERY OS)
+ *   "../../etc/foo.db" → REFUSED loudly (its parent escapes cwd)
  *
- * Never mkdir a directory that isn't a descendant of cwd — that was the
- * root cause of the `EROFS: read-only file system, mkdir '/data'` crash
- * reported on macOS.
+ * The canonical contract is ADR-0086. Two things this pins that node:path alone
+ * gets wrong: a drive-letter path is absolute on POSIX too (isAbsolute does not
+ * recognise it, so it would be re-rooted under cwd), and a relative path whose
+ * parent escapes cwd must be REFUSED — never the silent mkdir outside the
+ * project that was the root cause of the `EROFS: mkdir '/data'` crash.
  */
-function resolveSqlitePath(dbPath: string): string {
+export function resolveSqlitePath(dbPath: string): string {
   if (dbPath === ":memory:") return dbPath;
 
-  let path = dbPath;
-  if (!isAbsolute(path)) {
-    path = join(process.cwd(), path);
-    // Auto-mkdir is safe here — we know the parent is under cwd
-    mkdirSync(dirname(path), { recursive: true });
-  } else {
-    // Absolute path. Only auto-mkdir if it's a descendant of cwd.
-    const cwd = resolve(process.cwd());
-    const abs = resolve(path);
-    if (abs.startsWith(cwd + "/") || abs === cwd) {
-      mkdirSync(dirname(abs), { recursive: true });
-    }
-    // Otherwise, trust the user — don't touch the filesystem.
+  // A Windows drive-letter path (C:/... or C:\...) is absolute on EVERY OS.
+  // node:path.isAbsolute does NOT recognise it on POSIX (it would re-root the
+  // path under cwd), so recognise it explicitly for parity (ADR-0086).
+  const isWindowsAbs = /^[A-Za-z]:[\\/]/.test(dbPath);
+  if (isAbsolute(dbPath) || isWindowsAbs) {
+    // Absolute — trust the user; never auto-mkdir (parity with the other three).
+    return dbPath;
   }
+
+  // Relative — resolve under cwd; create the parent (mode 0775) ONLY when it
+  // stays inside cwd. A relative path whose parent escapes the project is
+  // REFUSED loudly — never a silent mkdir outside the project.
+  const cwd = resolve(process.cwd());
+  const path = join(cwd, dbPath);
+  const parent = dirname(path);
+  const absParent = resolve(parent);
+  if (absParent !== cwd && !absParent.startsWith(cwd + sep)) {
+    throw new Error(
+      `SQLite path "${dbPath}" resolves outside the project directory: ` +
+        `"${absParent}" is not within "${cwd}". Tina4 refuses to create ` +
+        `directories outside the project (ADR-0086). Use an absolute path for a ` +
+        `database that lives outside the project.`,
+    );
+  }
+  mkdirSync(parent, { recursive: true, mode: 0o775 });
   return path;
 }
 

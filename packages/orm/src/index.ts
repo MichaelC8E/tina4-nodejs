@@ -93,7 +93,7 @@ export type {
 } from "./docstore.js";
 
 // Database adapters
-export { SQLiteAdapter } from "./adapters/sqlite.js";
+export { SQLiteAdapter, resolveSqlitePath } from "./adapters/sqlite.js";
 export { PostgresAdapter } from "./adapters/postgres.js";
 export type { PostgresConfig } from "./adapters/postgres.js";
 export { MysqlAdapter } from "./adapters/mysql.js";
