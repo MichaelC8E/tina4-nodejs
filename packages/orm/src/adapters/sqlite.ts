@@ -7,7 +7,8 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 */
 
 import { DatabaseSync } from "node:sqlite";
-import { ANSI_DIALECT, buildInsert, buildSetClause, buildWhereClause } from "./sqlDialect.js";
+import { ANSI_DIALECT } from "./sqlDialect.js";
+import { buildDelete, buildInsertRow, buildInsertRows, buildUpdate } from "./sqlCrud.js";
 import { mkdirSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { DatabaseAdapter, DatabaseResult, ColumnInfo, FieldDefinition } from "../types.js";
@@ -278,17 +279,13 @@ export class SQLiteAdapter implements DatabaseAdapter {
 
   insert(table: string, data: Record<string, unknown> | Record<string, unknown>[]): DatabaseResult {
     if (Array.isArray(data)) {
-      if (data.length === 0) return { success: true, affectedRows: 0 };
-      const keys = Object.keys(data[0]);
-      const sql = buildInsert(ANSI_DIALECT, table, keys);
-      const paramsList = data.map((row) => keys.map((k) => row[k]));
-      const result = this.executeMany(sql, paramsList);
+      const batch = buildInsertRows(ANSI_DIALECT, table, data);
+      if (!batch) return { success: true, affectedRows: 0 };
+      const result = this.executeMany(batch.sql, batch.paramsList);
       return { success: true, affectedRows: result.affectedRows, lastId: result.lastId };
     }
 
-    const keys = Object.keys(data);
-    const sql = buildInsert(ANSI_DIALECT, table, keys);
-    const values = Object.values(data);
+    const { sql, values } = buildInsertRow(ANSI_DIALECT, table, data);
 
     try {
       const result = this.db.prepare(sql).run(...toSqlParams(values));
@@ -300,30 +297,11 @@ export class SQLiteAdapter implements DatabaseAdapter {
   }
 
   update(table: string, data: Record<string, unknown>, filter: Record<string, unknown> | string, params?: unknown[]): DatabaseResult {
-    const setClauses = buildSetClause(ANSI_DIALECT, Object.keys(data));
-
-    // A raw WHERE fragment + params is half the write_path contract's filter
-    // form ("a string filter with params works the same as a hash filter").
-    // Without this branch Object.keys("id = ?") yields the STRING INDICES
-    // ["0","1",...], producing `WHERE "0" = ? AND "1" = ?` and SQLite reports
-    // `no such column: "0"`. delete() below already carried this branch and
-    // update() did not — the same gap 3.13.94 closed in the postgres/mysql/
-    // mssql/firebird adapters, still open here on the DEFAULT engine.
-    if (typeof filter === "string") {
-      const where = filter ? ` WHERE ${filter}` : "";
-      const sql = `UPDATE ${ANSI_DIALECT.quote(table)} SET ${setClauses}${where}`;
-      const values = [...Object.values(data), ...(params ?? [])];
-      try {
-        const result = this.db.prepare(sql).run(...toSqlParams(values));
-        return { success: true, affectedRows: Number(result.changes) };
-      } catch (e) {
-        return { success: false, affectedRows: 0, error: (e as Error).message };
-      }
-    }
-
-    const whereClauses = buildWhereClause(ANSI_DIALECT, Object.keys(filter));
-    const sql = `UPDATE ${ANSI_DIALECT.quote(table)} SET ${setClauses} WHERE ${whereClauses}`;
-    const values = [...Object.values(data), ...Object.values(filter)];
+    // The string-filter vs hash-filter branch and the value assembly live in the
+    // shared composer (sqlCrud.ts); SQLite supplies only its driver execution.
+    // A raw WHERE fragment carries `?` markers, which SQLite uses natively, so no
+    // fragment rewrite is needed.
+    const { sql, values } = buildUpdate(ANSI_DIALECT, table, data, filter, params);
 
     try {
       const result = this.db.prepare(sql).run(...toSqlParams(values));
@@ -343,19 +321,7 @@ export class SQLiteAdapter implements DatabaseAdapter {
       return { success: true, affectedRows: totalAffected };
     }
 
-    if (typeof filter === "string") {
-      const sql = filter ? `DELETE FROM "${table}" WHERE ${filter}` : `DELETE FROM "${table}"`;
-      try {
-        const result = this.db.prepare(sql).run(...toSqlParams(params ?? []));
-        return { success: true, affectedRows: Number(result.changes) };
-      } catch (e) {
-        return { success: false, affectedRows: 0, error: (e as Error).message };
-      }
-    }
-
-    const whereClauses = buildWhereClause(ANSI_DIALECT, Object.keys(filter));
-    const sql = `DELETE FROM ${ANSI_DIALECT.quote(table)} WHERE ${whereClauses}`;
-    const values = Object.values(filter);
+    const { sql, values } = buildDelete(ANSI_DIALECT, table, filter, params);
 
     try {
       const result = this.db.prepare(sql).run(...toSqlParams(values));
