@@ -65,6 +65,11 @@ jobs:
     needs: release-package
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    # Gate the actual npm publish behind a protected GitHub Environment. The
+    # NPM_TOKEN lives on the `release` environment, which requires a reviewer to
+    # approve the run and restricts deployment to the release tags. A tag push
+    # will first wait for that approval before this job can touch the registry.
+    environment: release
     permissions:
       contents: write
       id-token: write
