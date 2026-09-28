@@ -47,6 +47,12 @@ import { Database, createAdapterFromUrl } from "../packages/orm/src/index.js";
 let pass = 0;
 let fail = 0;
 
+// BigInt-safe: mysql2 returns COUNT()/affectedRows as BigInt, and JSON.stringify
+// throws on a BigInt. The detail string must never crash the run.
+function j(value: unknown): string {
+  return JSON.stringify(value, (_k, v) => (typeof v === "bigint" ? v.toString() : v));
+}
+
 function check(name: string, condition: boolean, detail = ""): void {
   if (condition) {
     pass++;
@@ -144,48 +150,48 @@ async function runMatrix(engine: EngineCase, url: string): Promise<void> {
 
     // insert (single) — round-trip + affectedRows
     const ins = await db.insert(t, { id: 1, label: "alpha" });
-    check(`${engine.name}: insert single affectedRows=1`, ins.affectedRows === 1, JSON.stringify(ins));
+    check(`${engine.name}: insert single affectedRows=1`, Number(ins.affectedRows) === 1, j(ins));
     let row = await db.fetchOne<{ label: string }>(`SELECT label FROM ${t} WHERE id = ?`, [1]);
-    check(`${engine.name}: insert single round-trips`, row?.label === "alpha", JSON.stringify(row));
+    check(`${engine.name}: insert single round-trips`, row?.label === "alpha", j(row));
 
     // insert (batch)
     const batch = await db.insert(t, [{ id: 2, label: "beta" }, { id: 3, label: "gamma" }]);
-    check(`${engine.name}: insert batch affectedRows=2`, batch.affectedRows === 2, JSON.stringify(batch));
+    check(`${engine.name}: insert batch affectedRows=2`, Number(batch.affectedRows) === 2, j(batch));
 
     // update (hash filter)
     const uHash = await db.update(t, { label: "ALPHA" }, { id: 1 });
-    check(`${engine.name}: update hash affectedRows=1`, uHash.affectedRows === 1, JSON.stringify(uHash));
+    check(`${engine.name}: update hash affectedRows=1`, Number(uHash.affectedRows) === 1, j(uHash));
     row = await db.fetchOne(`SELECT label FROM ${t} WHERE id = ?`, [1]);
-    check(`${engine.name}: update hash applied`, row?.label === "ALPHA", JSON.stringify(row));
+    check(`${engine.name}: update hash applied`, row?.label === "ALPHA", j(row));
 
     // update (string filter + params) — the Object.keys() footgun case
     const uStr = await db.update(t, { label: "BETA" }, "id = ?", [2]);
-    check(`${engine.name}: update string-filter affectedRows=1`, uStr.affectedRows === 1, JSON.stringify(uStr));
+    check(`${engine.name}: update string-filter affectedRows=1`, Number(uStr.affectedRows) === 1, j(uStr));
     row = await db.fetchOne(`SELECT label FROM ${t} WHERE id = ?`, [2]);
-    check(`${engine.name}: update string-filter applied`, row?.label === "BETA", JSON.stringify(row));
+    check(`${engine.name}: update string-filter applied`, row?.label === "BETA", j(row));
 
     // injection safety — the payload is bound as data, not interpolated
     const uInj = await db.update(t, { label: INJECTION }, "id = ?", [3]);
-    check(`${engine.name}: injection update affectedRows=1`, uInj.affectedRows === 1, JSON.stringify(uInj));
+    check(`${engine.name}: injection update affectedRows=1`, Number(uInj.affectedRows) === 1, j(uInj));
     row = await db.fetchOne(`SELECT label FROM ${t} WHERE id = ?`, [3]);
-    check(`${engine.name}: injection payload round-trips verbatim`, row?.label === INJECTION, JSON.stringify(row));
+    check(`${engine.name}: injection payload round-trips verbatim`, row?.label === INJECTION, j(row));
     const survives = await db.fetchOne<{ n: number }>(`SELECT COUNT(*) AS n FROM ${t}`);
-    check(`${engine.name}: table survived injection (3 rows)`, Number(survives?.n) === 3, JSON.stringify(survives));
+    check(`${engine.name}: table survived injection (3 rows)`, Number(survives?.n) === 3, j(survives));
 
     // delete (hash filter)
     const dHash = await db.delete(t, { id: 1 });
-    check(`${engine.name}: delete hash affectedRows=1`, dHash.affectedRows === 1, JSON.stringify(dHash));
+    check(`${engine.name}: delete hash affectedRows=1`, Number(dHash.affectedRows) === 1, j(dHash));
 
     // delete (string filter + params)
     const dStr = await db.delete(t, "id = ?", [2]);
-    check(`${engine.name}: delete string-filter affectedRows=1`, dStr.affectedRows === 1, JSON.stringify(dStr));
+    check(`${engine.name}: delete string-filter affectedRows=1`, Number(dStr.affectedRows) === 1, j(dStr));
 
     // durability on a FRESH connection: only id=3 remains
     const fresh = await connect(url);
     try {
       const remaining = await fresh.fetch(`SELECT id FROM ${t} ORDER BY id`);
       const ids = remaining.records.map((r: any) => Number(r.id));
-      check(`${engine.name}: durable — only id=3 remains`, JSON.stringify(ids) === JSON.stringify([3]), JSON.stringify(ids));
+      check(`${engine.name}: durable — only id=3 remains`, j(ids) === j([3]), j(ids));
     } finally {
       fresh.close();
     }
@@ -208,7 +214,7 @@ async function runSqlite(): Promise<void> {
       await db.execute("CREATE TABLE crudchar_auto (id INTEGER PRIMARY KEY AUTOINCREMENT, label VARCHAR(200))");
       await db.insert("crudchar_auto", { label: "first" });
       const r2 = await db.insert("crudchar_auto", { label: "second" });
-      check("sqlite: lastId reflects the autoincrement row", Number(r2.lastId) === 2, JSON.stringify(r2));
+      check("sqlite: lastId reflects the autoincrement row", Number(r2.lastId) === 2, j(r2));
     } finally {
       db.close();
     }
