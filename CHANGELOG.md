@@ -6,6 +6,24 @@ number means the same thing everywhere.
 **The authoritative release notes for every shipped version live in the documentation:**
 https://tina4.com/nodejs/36-releases
 
+## 3.13.140 — 2026-09-28
+
+The doc-drift gate now stands at the door of every pull request. It reads the live export surface straight from each package barrel, and it fails the build the moment the packaged CLAUDE.md documents a `@tina4` import the code no longer hands out. The ORM CRUD write path stops repeating itself too: one shared SQL composer builds every insert, update and delete, and all six engines route through it.
+
+**Features & refactors**
+- ORM CRUD dedup: a single shared SQL CRUD composer (`sqlCrud.ts`) now writes every insert, update and delete, with SQLite, PostgreSQL, MySQL, MSSQL, Firebird and ODBC all routed through it.
+
+**Fixes**
+- SQLite path contract (ADR-0086): a Windows drive-letter passes straight through on POSIX, a path that tries to escape its root is refused, and the database directory is created 0775.
+- CRUD pluralisation parity: generated crud route names derive from the singular base, so Node lines up with Python, PHP and Ruby.
+- Skill docs 90/91: the stale-skill check resolves its paths, and `addGlobal` closures now warn amongst the checks instead of slipping past silently.
+
+**Docs**
+- Web Push skill mirrors sync back to the `.claude` canonical, and the tina4-js `rtc.md` fix propagates through.
+
+**CI**
+- npm publish is gated behind the protected release environment, with release actions pinned by commit SHA.
+
 ## 3.13.139
 
 Outbound requests from the Api client and Web Push are guarded against SSRF: private, loopback and link-local targets are refused unless explicitly allowed (ADR-0084). The development admin surface is hardened -- the health endpoint no longer discloses the framework version outside debug, and development binds loopback by default (ADR-0078). Production refuses to boot with a blank or short HMAC secret so tokens cannot be forged (ADR-0079). Queue reject() dead-letters immediately and size("dead") reports the dead-letter depth (ADR-0022, ADR-0023). Session table first-use is concurrency-safe across every engine. Mail encryption follows the configured TLS/STARTTLS contract (ADR-0071). Log output, driver-install hints and WSDL/mail diagnostics redact credentials and URLs. Publishing is gated behind a protected environment with release actions pinned by commit SHA, and a medium-severity API token-leak path is closed. The framework still has no required runtime dependencies.

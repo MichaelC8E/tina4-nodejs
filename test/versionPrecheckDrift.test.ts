@@ -47,6 +47,7 @@ const VERSION_FILES = [
   "package.json",
   "package-lock.json",
   "CLAUDE.md",
+  "AGENTS.md",
   "packages/cli/package.json",
   "packages/core/package.json",
   "packages/frond/package.json",
