@@ -12,7 +12,8 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
  * Install: npm install tedious
  * URL format: mssql://user:pass@host:port/database
  */
-import { ANSI_DIALECT, MSSQL_DIALECT, buildInsert, buildSetClause, buildWhereClause } from "./sqlDialect.js";
+import { ANSI_DIALECT, MSSQL_DIALECT } from "./sqlDialect.js";
+import { buildDelete, buildInsertRow, buildInsertRows, buildUpdate } from "./sqlCrud.js";
 import type { DatabaseAdapter, DatabaseResult, ColumnInfo, FieldDefinition } from "../types.js";
 import { SQLTranslator } from "../sqlTranslator.js";
 import { connectTimeoutMillis, driverConnectTimeoutMillis, withConnectTimeout } from "../connectTimeout.js";
@@ -360,15 +361,13 @@ export class MssqlAdapter implements DatabaseAdapter {
     // tracked for a batch — affectedRows == row count is what callers rely on).
     // See PostgresAdapter for the array-crash rationale this branch fixes.
     if (Array.isArray(data)) {
-      if (data.length === 0) return { success: true, affectedRows: 0 };
-      const keys = Object.keys(data[0]);
       // `?` placeholders — executeManyAsync -> executeAsync runs convertPlaceholders,
-      // which rewrites them to @p0, @p1, ... for tedious.
-      // The batch path binds through executeMany, which converts "?" itself.
-      const sql = buildInsert({ quote: MSSQL_DIALECT.quote, marker: ANSI_DIALECT.marker }, table, keys);
-      const paramsList = data.map((row) => keys.map((k) => row[k]));
+      // which rewrites them to @p0, @p1, ... for tedious. So the batch INSERT is
+      // built with MSSQL's bracket quoting but the ANSI `?` marker.
+      const batch = buildInsertRows({ quote: MSSQL_DIALECT.quote, marker: ANSI_DIALECT.marker }, table, data);
+      if (!batch) return { success: true, affectedRows: 0 };
       try {
-        const result = await this.executeManyAsync(sql, paramsList);
+        const result = await this.executeManyAsync(batch.sql, batch.paramsList);
         if (result.lastId !== undefined) this._lastInsertId = result.lastId;
         return { success: true, affectedRows: result.totalAffected, lastId: result.lastId };
       } catch (e) {
@@ -376,11 +375,9 @@ export class MssqlAdapter implements DatabaseAdapter {
       }
     }
 
-    const keys = Object.keys(data);
     // startAt 0: MSSQL BINDS by the marker name, so @p must start where the
     // binding loop starts. Shifting to 1 would name parameters that do not exist.
-    const sql = buildInsert(MSSQL_DIALECT, table, keys, "; SELECT SCOPE_IDENTITY() AS id", 0);
-    const values = Object.values(data);
+    const { sql, values } = buildInsertRow(MSSQL_DIALECT, table, data, "; SELECT SCOPE_IDENTITY() AS id", { startAt: 0 });
 
     try {
       const result = await this.execSqlPromise(sql, values);
@@ -406,32 +403,13 @@ export class MssqlAdapter implements DatabaseAdapter {
 
   async updateAsync(table: string, data: Record<string, unknown>, filter: Record<string, unknown> | string, params?: unknown[]): Promise<DatabaseResult> {
     this.ensureConnected();
-    const dataKeys = Object.keys(data);
-    let paramIndex = 0;
-    const setClauses = buildSetClause(MSSQL_DIALECT, dataKeys, paramIndex);
-    paramIndex += dataKeys.length;
-
-    // A raw WHERE fragment + params is half the write_path contract's filter
-    // form. Without this branch Object.keys("id = ?") yields the STRING INDICES
-    // ["0","1",...], producing `WHERE [0] = @p1 AND [1] = @p2` — SQL Server then
-    // reports an invalid column name '0'.
-    if (typeof filter === "string") {
-      const where = filter ? ` WHERE ${this.convertPlaceholders(filter, paramIndex)}` : "";
-      const sql = `UPDATE ${MSSQL_DIALECT.quote(table)} SET ${setClauses}${where}`;
-      const values = [...Object.values(data), ...(params ?? [])];
-      try {
-        const result = await this.execSqlPromise(sql, values);
-        return { success: true, affectedRows: result.rowCount };
-      } catch (e) {
-        return { success: false, affectedRows: 0, error: (e as Error).message };
-      }
-    }
-
-    const filterKeys = Object.keys(filter);
-    const whereClauses = buildWhereClause(MSSQL_DIALECT, filterKeys, paramIndex);
-    paramIndex += filterKeys.length;
-    const sql = `UPDATE ${MSSQL_DIALECT.quote(table)} SET ${setClauses} WHERE ${whereClauses}`;
-    const values = [...Object.values(data), ...Object.values(filter)];
+    // @pN markers name from 0 (MSSQL binds by name); the WHERE markers continue
+    // past the SET values. A raw string filter's `?` are rewritten to @pN via
+    // convertPlaceholders at the correct start position.
+    const { sql, values } = buildUpdate(MSSQL_DIALECT, table, data, filter, params, {
+      startAt: 0,
+      convertFragment: (fragment, startAt) => this.convertPlaceholders(fragment, startAt),
+    });
 
     try {
       const result = await this.execSqlPromise(sql, values);
@@ -447,27 +425,12 @@ export class MssqlAdapter implements DatabaseAdapter {
 
   async deleteAsync(table: string, filter: Record<string, unknown> | string, params?: unknown[]): Promise<DatabaseResult> {
     this.ensureConnected();
-
-    // See updateAsync: truncate() calls this with "1 = 1", which became
-    // `WHERE [0] = @p0 AND [1] = @p1 ...` — db.truncate() was broken outright.
-    if (typeof filter === "string") {
-      const sql = filter
-        ? `DELETE FROM [${table}] WHERE ${this.bindable(filter, params)}`
-        : `DELETE FROM [${table}]`;
-      try {
-        const result = await this.execSqlPromise(sql, params ?? []);
-        return { success: true, affectedRows: result.rowCount };
-      } catch (e) {
-        return { success: false, affectedRows: 0, error: (e as Error).message };
-      }
-    }
-
-    const filterKeys = Object.keys(filter);
-    let paramIndex = 0;
-    const whereClauses = buildWhereClause(MSSQL_DIALECT, filterKeys, paramIndex);
-    paramIndex += filterKeys.length;
-    const sql = `DELETE FROM ${MSSQL_DIALECT.quote(table)} WHERE ${whereClauses}`;
-    const values = Object.values(filter);
+    // bindable() rewrites a raw fragment's `?` to @pN only when params are bound
+    // (truncate() passes "1 = 1" with none). A hash filter numbers @pN from 0.
+    const { sql, values } = buildDelete(MSSQL_DIALECT, table, filter, params, {
+      startAt: 0,
+      convertFragment: (fragment) => this.bindable(fragment, params),
+    });
 
     try {
       const result = await this.execSqlPromise(sql, values);

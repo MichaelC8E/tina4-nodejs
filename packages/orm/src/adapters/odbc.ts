@@ -16,7 +16,8 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
  * The connection string after stripping the "odbc:///" prefix is passed
  * directly to odbc.connect(), so any valid ODBC connection string works.
  */
-import { ANSI_DIALECT, buildInsert, buildSetClause, buildWhereClause } from "./sqlDialect.js";
+import { ANSI_DIALECT } from "./sqlDialect.js";
+import { buildDelete, buildInsertRow, buildInsertRows, buildUpdate } from "./sqlCrud.js";
 import type { DatabaseAdapter, DatabaseResult, ColumnInfo, FieldDefinition } from "../types.js";
 import { createRequire } from "node:module";
 import { SQLTranslator } from "../sqlTranslator.js";
@@ -303,17 +304,13 @@ export class OdbcAdapter implements DatabaseAdapter {
     // Python master. The single-object path used to run Object.keys() over the
     // array here -> ["0","1",...], a broken INSERT, so batch insert never worked.
     if (Array.isArray(data)) {
-      if (data.length === 0) return { success: true, affectedRows: 0 };
-      const keys = Object.keys(data[0]);
-      const sql = buildInsert(ANSI_DIALECT, table, keys);
-      const paramsList = data.map((row) => keys.map((k) => (row as Record<string, unknown>)[k]));
-      const { totalAffected } = await this.executeManyAsync(sql, paramsList);
+      const batch = buildInsertRows(ANSI_DIALECT, table, data);
+      if (!batch) return { success: true, affectedRows: 0 };
+      const { totalAffected } = await this.executeManyAsync(batch.sql, batch.paramsList);
       return { success: true, affectedRows: totalAffected };
     }
 
-    const keys = Object.keys(data);
-    const sql = buildInsert(ANSI_DIALECT, table, keys);
-    const values = Object.values(data);
+    const { sql, values } = buildInsertRow(ANSI_DIALECT, table, data);
 
     try {
       const result = await this.connection.query(sql, values);
@@ -331,23 +328,10 @@ export class OdbcAdapter implements DatabaseAdapter {
     params?: unknown[],
   ): Promise<DatabaseResult> {
     this.ensureConnected();
-    const setClauses = buildSetClause(ANSI_DIALECT, Object.keys(data));
-
-    let whereSql: string;
-    let values: unknown[];
-    if (typeof filter === "string") {
-      // The string form ("id = ?" + params). Without this branch Object.keys()
-      // walked the STRING -> ["0","1",...], building a nonsense WHERE clause -
-      // the exact bug the pg/mysql/mssql adapters guard against. params was also
-      // dropped entirely (the method never took it), so a parameterised string
-      // filter could not bind at all.
-      whereSql = filter;
-      values = [...Object.values(data), ...(params ?? [])];
-    } else {
-      whereSql = buildWhereClause(ANSI_DIALECT, Object.keys(filter));
-      values = [...Object.values(data), ...Object.values(filter)];
-    }
-    const sql = `UPDATE ${ANSI_DIALECT.quote(table)} SET ${setClauses} WHERE ${whereSql}`;
+    // ODBC (the lab DSN is PostgreSQL) still passes `?` markers through — the
+    // driver binds them positionally — so no fragment rewrite. The string vs
+    // hash branch and value assembly are the shared composer's.
+    const { sql, values } = buildUpdate(ANSI_DIALECT, table, data, filter, params);
 
     try {
       const result = await this.connection.query(sql, values);
@@ -374,22 +358,7 @@ export class OdbcAdapter implements DatabaseAdapter {
       return { success: true, affectedRows: totalAffected };
     }
 
-    if (typeof filter === "string") {
-      // The string form binds its own params (was dropped: query ran with []).
-      const sql = filter
-        ? `DELETE FROM "${table}" WHERE ${filter}`
-        : `DELETE FROM "${table}"`;
-      try {
-        const result = await this.connection.query(sql, params ?? []);
-        return { success: true, affectedRows: this.affectedCount(result) };
-      } catch (e) {
-        return { success: false, affectedRows: 0, error: (e as Error).message };
-      }
-    }
-
-    const whereClauses = buildWhereClause(ANSI_DIALECT, Object.keys(filter));
-    const sql = `DELETE FROM ${ANSI_DIALECT.quote(table)} WHERE ${whereClauses}`;
-    const values = Object.values(filter);
+    const { sql, values } = buildDelete(ANSI_DIALECT, table, filter, params);
 
     try {
       const result = await this.connection.query(sql, values);

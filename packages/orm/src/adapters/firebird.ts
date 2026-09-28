@@ -12,7 +12,8 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
  * Install: npm install node-firebird
  * URL format: firebird://user:pass@host:port/path/to/database.fdb
  */
-import { firebirdDialect, buildInsert, buildSetClause, buildWhereClause, quoteIdentifierWith } from "./sqlDialect.js";
+import { firebirdDialect, quoteIdentifierWith } from "./sqlDialect.js";
+import { buildDelete, buildInsertRow, buildInsertRows, buildUpdate } from "./sqlCrud.js";
 import type { DatabaseAdapter, DatabaseResult, ColumnInfo, FieldDefinition } from "../types.js";
 import { SQLTranslator } from "../sqlTranslator.js";
 import { connectTimeoutMillis, withConnectTimeout } from "../connectTimeout.js";
@@ -643,19 +644,15 @@ export class FirebirdAdapter implements DatabaseAdapter {
     // the batch reports affectedRows == row count and no lastInsertId (same as the
     // single-row path). See PostgresAdapter for the array-crash rationale.
     if (Array.isArray(data)) {
-      if (data.length === 0) return { success: true, affectedRows: 0 };
-      const keys = Object.keys(data[0]);
-      const sql = buildInsert(FB_DIALECT, table, keys);
-      const paramsList = data.map((row) => keys.map((k) => row[k]));
-      const result = await this.executeManyAsync(sql, paramsList);
+      const batch = buildInsertRows(FB_DIALECT, table, data);
+      if (!batch) return { success: true, affectedRows: 0 };
+      const result = await this.executeManyAsync(batch.sql, batch.paramsList);
       // The generator holds the LAST inserted id after the batch (FB-LASTID-GAP).
       const lastId = (await this.readGeneratorId(table)) ?? result.lastId;
       return { success: true, affectedRows: result.totalAffected, lastId: lastId ?? undefined };
     }
 
-    const keys = Object.keys(data);
-    const sql = buildInsert(FB_DIALECT, table, keys);
-    const values = Object.values(data);
+    const { sql, values } = buildInsertRow(FB_DIALECT, table, data);
 
     // FAIL LOUD, like fetch/execute and the other three frameworks: a bad statement
     // RAISES and never returns a falsy result. Swallowing it into {success:false}
@@ -674,29 +671,12 @@ export class FirebirdAdapter implements DatabaseAdapter {
 
   async updateAsync(table: string, data: Record<string, unknown>, filter: Record<string, unknown> | string, params?: unknown[]): Promise<DatabaseResult> {
     this.ensureConnected();
-    // Identifiers go through fbQuote, exactly like insertAsync. Firebird folds an
-    // UNQUOTED identifier to uppercase, so a conventional `CREATE TABLE probe_t`
-    // stores PROBE_T/ID — and a hand-rolled `"${k}"` emits lowercase-quoted "id",
-    // which is a DIFFERENT, non-existent column. update and delete were therefore
-    // broken on every conventionally-created Firebird table while insert worked.
-    const setClauses = buildSetClause(FB_DIALECT, Object.keys(data));
-
-    // A raw WHERE fragment + params is half the write_path contract's filter
-    // form. Without this branch Object.keys("id = ?") yields the STRING INDICES
-    // ["0","1",...] and the statement addresses columns that do not exist.
-    // Firebird already uses `?`, so the fragment needs no rewriting.
-    if (typeof filter === "string") {
-      const where = filter ? ` WHERE ${filter}` : "";
-      const affected = await this.executeReturningCount(
-        `UPDATE ${fbQuote(table)} SET ${setClauses}${where}`,
-        [...Object.values(data), ...(params ?? [])],
-      );
-      return { success: true, affectedRows: affected };
-    }
-
-    const whereClauses = buildWhereClause(FB_DIALECT, Object.keys(filter));
-    const sql = `UPDATE ${FB_DIALECT.quote(table)} SET ${setClauses} WHERE ${whereClauses}`;
-    const values = [...Object.values(data), ...Object.values(filter)];
+    // FB_DIALECT.quote is fbQuote: Firebird folds an UNQUOTED identifier to
+    // uppercase, so a conventional `CREATE TABLE probe_t` stores PROBE_T/ID and a
+    // lowercase-quoted "id" would be a different, non-existent column. The
+    // composer routes every identifier through it. Firebird uses `?` natively, so
+    // a raw string filter needs no rewrite.
+    const { sql, values } = buildUpdate(FB_DIALECT, table, data, filter, params);
 
     const affected = await this.executeReturningCount(sql, values);
     return { success: true, affectedRows: affected };
@@ -708,19 +688,8 @@ export class FirebirdAdapter implements DatabaseAdapter {
 
   async deleteAsync(table: string, filter: Record<string, unknown> | string, params?: unknown[]): Promise<DatabaseResult> {
     this.ensureConnected();
-
-    // See updateAsync: truncate() calls this with "1 = 1", which walked the
-    // string as an object — db.truncate() was broken outright.
-    if (typeof filter === "string") {
-      const where = filter ? ` WHERE ${filter}` : "";
-      const affected = await this.executeReturningCount(`DELETE FROM ${fbQuote(table)}${where}`, params ?? []);
-      return { success: true, affectedRows: affected };
-    }
-
-    // Same fbQuote policy as insert/update — see updateAsync.
-    const whereClauses = buildWhereClause(FB_DIALECT, Object.keys(filter));
-    const sql = `DELETE FROM ${FB_DIALECT.quote(table)} WHERE ${whereClauses}`;
-    const values = Object.values(filter);
+    // Same fbQuote (FB_DIALECT.quote) policy as insert/update; `?` markers native.
+    const { sql, values } = buildDelete(FB_DIALECT, table, filter, params);
 
     const affected = await this.executeReturningCount(sql, values);
     return { success: true, affectedRows: affected };
