@@ -36,7 +36,7 @@ sqlite.ts(316), firebird.ts(532,752), database.ts, cachedDatabase.ts.
 ## Parity
 | Feature | Python | PHP | Ruby | Node |
 |---------|--------|-----|------|------|
-| CRUD-SQL builder shared home | ✅ SqlCrudMixin | ⚠️ CrudSqlTrait (partial) | ⚠️ | ❌ port target |
+| CRUD-SQL builder shared home | ✅ SqlCrudMixin | ⚠️ CrudSqlTrait (partial) | ⚠️ | ✅ sqlCrud.ts |
 
 ## Tests (written first, real, no mocks)
 - [x] `test/sqlCrudWritePath.test.ts` — characterization across live engines (SQLite always;
@@ -50,6 +50,34 @@ sqlite.ts(316), firebird.ts(532,752), database.ts, cachedDatabase.ts.
 
 ## Bugs — [ ] (none found; refactor is behaviour-preserving)
 
-## Commits —
+## What was extracted vs left (per-engine)
+- EXTRACTED into `packages/orm/src/adapters/sqlCrud.ts` (buildInsertRow / buildInsertRows /
+  buildUpdate / buildDelete): the string-vs-hash filter branch, `[...data, ...(params ?? [])]`
+  value assembly, batch fan-out, empty-list/empty-filter handling. −212 LOC across the six
+  adapters, one 178-line composer shared by all.
+- LEFT per-adapter (as scoped): dialect object, RETURNING */SCOPE_IDENTITY()/generator lastId,
+  the driver call + result extraction (prepare().run() / client.query / tedious / FB txn /
+  odbc), placeholder rewrite fed in as `convertFragment` (convertPlaceholders / bindable) with
+  `startAt` (pg 1, mssql 0), MSSQL 2-statement affectedRows=1, FB fail-loud single insert.
+- Deliberately un-merged (distinct concern, out of scope — "do not couple distinct concerns"):
+  the READ path (fetchAsync/fetchOneAsync LIMIT/OFFSET) and connection/sync-stub scaffolding
+  the clone detector still flags (12 small 6-13 line adapter clones). A separate read-path task.
 
-## Status: In Progress (characterization GREEN at baseline; extracting per-adapter)
+## Metrics (native engine v3.8.92, `tina4 metrics --json`)
+- BEFORE 1ed12d3: duplicate_blocks=61, duplicate_lines=607
+- AFTER  HEAD:     duplicate_blocks=61, duplicate_lines=581 (−26)
+- Adapter write-path LOC: −212 (300 removed, 88 added) collapsed into sqlCrud.ts (+178).
+- The clone detector never counted the interleaved CRUD bodies as line-clones (per-engine
+  execution lines interleaved), so its block count is flat; the DRY/LOC win is the real signal.
+
+## Commits (on feature/orm-crud-dedup, off origin/v3 @ 1ed12d3)
+- 28309fc  test(orm): characterize CRUD write path across live engines
+- b537ef4  refactor(orm): add shared SQL CRUD composer (sqlCrud.ts) + unit lock
+- 6eb78ab  refactor(orm): route SQLite insert/update/delete through the composer
+- 8a03b29  refactor(orm): route PostgreSQL insert/update/delete through the composer
+- 3fb2431  refactor(orm): route MySQL insert/update/delete through the composer
+- 0baffe5  refactor(orm): route MSSQL insert/update/delete through the composer
+- ed5f19c  refactor(orm): route Firebird insert/update/delete through the composer
+- 6ca4553  refactor(orm): route ODBC insert/update/delete through the composer
+
+## Status: In Progress (8 commits; typecheck rc=0 at every commit; full lab suite verifying at HEAD)
