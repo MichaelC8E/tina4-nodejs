@@ -47,6 +47,8 @@ assert(
 const claude = readFileSync(join(root, "CLAUDE.md"), "utf-8");
 assert(`CLAUDE.md title shows (v${expected})`, claude.includes(`tina4-nodejs (v${expected})`));
 assert(`CLAUDE.md intro shows v${expected}`, claude.includes(`Tina4 for Node.js/TypeScript v${expected} -`));
+const agents = readFileSync(join(root, "AGENTS.md"), "utf-8");
+assert(`AGENTS.md title shows v${expected}`, agents.includes(`# Tina4 Node.js v${expected} —`));
 for (const workspace of workspacePaths) {
   const actual = readJson(`${workspace}/package.json`).version;
   assert(`${workspace} matches root`, actual === expected, `expected ${expected}, got ${actual}`);
