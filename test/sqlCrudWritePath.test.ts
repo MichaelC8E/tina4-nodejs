@@ -116,7 +116,7 @@ const ENGINES: EngineCase[] = [
   {
     name: "odbc",
     tag: "postgres", // the lab DSN points ODBC at PostgreSQL
-    url: () => process.env.TINA4_TEST_ODBC_DSN && `odbc:///?DSN=${process.env.TINA4_TEST_ODBC_DSN}`,
+    url: () => process.env.TINA4_TEST_ODBC_DSN && `odbc:///${process.env.TINA4_TEST_ODBC_DSN}`,
     table: "crudchar_odbc",
     createSql: (t) => `CREATE TABLE ${t} (id INTEGER PRIMARY KEY, label VARCHAR(200))`,
   },
