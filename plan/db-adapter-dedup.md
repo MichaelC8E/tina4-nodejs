@@ -80,4 +80,14 @@ sqlite.ts(316), firebird.ts(532,752), database.ts, cachedDatabase.ts.
 - ed5f19c  refactor(orm): route Firebird insert/update/delete through the composer
 - 6ca4553  refactor(orm): route ODBC insert/update/delete through the composer
 
-## Status: In Progress (8 commits; typecheck rc=0 at every commit; full lab suite verifying at HEAD)
+## Verification (lab, HEAD 015eea7)
+- Full suite: **10503 passed, 0 failed, 39 skipped**, typecheck rc=0 (standard rel139 node env:
+  TINA4_REQUIRE_SERVICES=1, REQUIRE_OIDC, live PG/MySQL/MSSQL/Mongo/Redis/Valkey/Memcached/
+  RabbitMQ/Kafka/graph/Keycloak). The 39 skips are all `[needs:firebird]` — Firebird is not in
+  this env's coordinate set (same as the project's own rel139 node gate + CI); gate-excused,
+  NOT new.
+- Firebird proven separately (TINA4_TEST_FIREBIRD_URL set): sqlCrudWritePath **79 passed, 0 failed**
+  across ALL six engines (SQLite/PG/MySQL/MSSQL/Firebird/ODBC), firebirdProviderContract **10/0/0**.
+- typecheck rc=0 at EVERY one of the 8 refactor commits (bisect-clean).
+
+## Status: Complete (PR #95 into v3)
