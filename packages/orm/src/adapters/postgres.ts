@@ -12,7 +12,8 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
  * Install: npm install pg @types/pg
  * URL format: postgresql://user:pass@host:port/database
  */
-import { ANSI_DIALECT, POSTGRES_DIALECT, buildInsert, buildSetClause, buildWhereClause } from "./sqlDialect.js";
+import { ANSI_DIALECT, POSTGRES_DIALECT } from "./sqlDialect.js";
+import { buildDelete, buildInsertRow, buildInsertRows, buildUpdate } from "./sqlCrud.js";
 import type { DatabaseAdapter, DatabaseResult, ColumnInfo, FieldDefinition } from "../types.js";
 import { SQLTranslator } from "../sqlTranslator.js";
 import { connectTarget, connectTimeoutMillis, driverConnectTimeoutMillis, withConnectTimeout } from "../connectTimeout.js";
@@ -315,13 +316,11 @@ export class PostgresAdapter implements DatabaseAdapter {
     // — producing garbage SQL (mirrors the Python `'list' has no attribute keys`
     // crash this fix addresses).
     if (Array.isArray(data)) {
-      if (data.length === 0) return { success: true, affectedRows: 0 };
-      const keys = Object.keys(data[0]);
       // The batch path binds through executeManyAsync, which converts "?" itself.
-      const sql = buildInsert(ANSI_DIALECT, table, keys);
-      const paramsList = data.map((row) => keys.map((k) => row[k]));
+      const batch = buildInsertRows(ANSI_DIALECT, table, data);
+      if (!batch) return { success: true, affectedRows: 0 };
       try {
-        const result = await this.executeManyAsync(sql, paramsList);
+        const result = await this.executeManyAsync(batch.sql, batch.paramsList);
         if (result.lastId !== undefined) this._lastInsertId = result.lastId;
         return { success: true, affectedRows: result.totalAffected, lastId: result.lastId };
       } catch (e) {
@@ -329,9 +328,7 @@ export class PostgresAdapter implements DatabaseAdapter {
       }
     }
 
-    const keys = Object.keys(data);
-    const sql = buildInsert(POSTGRES_DIALECT, table, keys, " RETURNING *");
-    const values = Object.values(data);
+    const { sql, values } = buildInsertRow(POSTGRES_DIALECT, table, data, " RETURNING *");
 
     try {
       const result = await this.client!.query(sql, values);
@@ -354,34 +351,13 @@ export class PostgresAdapter implements DatabaseAdapter {
 
   async updateAsync(table: string, data: Record<string, unknown>, filter: Record<string, unknown> | string, params?: unknown[]): Promise<DatabaseResult> {
     this.ensureConnected();
-    const dataKeys = Object.keys(data);
-    let paramIndex = 1;
-    const setClauses = buildSetClause(POSTGRES_DIALECT, dataKeys, paramIndex);
-    paramIndex += dataKeys.length;
-
-    // A raw WHERE fragment + params is half the write_path contract's filter
-    // form ("a string filter with params works the same as a hash filter").
-    // Without this branch Object.keys("id = ?") yields the STRING INDICES
-    // ["0","1",...], producing `WHERE "0" = $2 AND "1" = $3` — the engine then
-    // reports `column "0" does not exist`. sqlite/mongodb/odbc already carried
-    // this branch; postgres/mysql/mssql/firebird did not.
-    if (typeof filter === "string") {
-      const where = filter ? ` WHERE ${this.convertPlaceholders(filter, paramIndex)}` : "";
-      const sql = `UPDATE ${POSTGRES_DIALECT.quote(table)} SET ${setClauses}${where}`;
-      const values = [...Object.values(data), ...(params ?? [])];
-      try {
-        const result = await this.client!.query(sql, values);
-        return { success: true, affectedRows: result.rowCount ?? 0 };
-      } catch (e) {
-        return { success: false, affectedRows: 0, error: (e as Error).message };
-      }
-    }
-
-    const filterKeys = Object.keys(filter);
-    const whereClauses = buildWhereClause(POSTGRES_DIALECT, filterKeys, paramIndex);
-    paramIndex += filterKeys.length;
-    const sql = `UPDATE ${POSTGRES_DIALECT.quote(table)} SET ${setClauses} WHERE ${whereClauses}`;
-    const values = [...Object.values(data), ...Object.values(filter)];
+    // The composer numbers the SET markers from $1 and continues the WHERE
+    // markers past them; a raw string filter's `?` are rewritten to $N via
+    // convertPlaceholders (identity would leave `?`, which pg rejects).
+    const { sql, values } = buildUpdate(POSTGRES_DIALECT, table, data, filter, params, {
+      startAt: 1,
+      convertFragment: (fragment, startAt) => this.convertPlaceholders(fragment, startAt),
+    });
 
     try {
       const result = await this.client!.query(sql, values);
@@ -397,29 +373,13 @@ export class PostgresAdapter implements DatabaseAdapter {
 
   async deleteAsync(table: string, filter: Record<string, unknown> | string, params?: unknown[]): Promise<DatabaseResult> {
     this.ensureConnected();
-
-    // See updateAsync: a raw WHERE fragment must not be walked as an object.
-    // truncate() calls this with "1 = 1", which became `WHERE "0" = $1 AND
-    // "1" = $2 ...` and failed with `column "0" does not exist` — db.truncate()
-    // was broken outright on PostgreSQL.
-    if (typeof filter === "string") {
-      const sql = filter
-        ? `DELETE FROM "${table}" WHERE ${this.bindable(filter, params)}`
-        : `DELETE FROM "${table}"`;
-      try {
-        const result = await this.client!.query(sql, params ?? []);
-        return { success: true, affectedRows: result.rowCount ?? 0 };
-      } catch (e) {
-        return { success: false, affectedRows: 0, error: (e as Error).message };
-      }
-    }
-
-    const filterKeys = Object.keys(filter);
-    let paramIndex = 1;
-    const whereClauses = buildWhereClause(POSTGRES_DIALECT, filterKeys, paramIndex);
-    paramIndex += filterKeys.length;
-    const sql = `DELETE FROM ${POSTGRES_DIALECT.quote(table)} WHERE ${whereClauses}`;
-    const values = Object.values(filter);
+    // bindable() rewrites a raw fragment's `?` to $N only when params are bound
+    // (truncate() passes "1 = 1" with none — no rewrite, no error). A hash filter
+    // numbers its `$N` from 1.
+    const { sql, values } = buildDelete(POSTGRES_DIALECT, table, filter, params, {
+      startAt: 1,
+      convertFragment: (fragment) => this.bindable(fragment, params),
+    });
 
     try {
       const result = await this.client!.query(sql, values);
