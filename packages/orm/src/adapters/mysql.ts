@@ -12,7 +12,8 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
  * Install: npm install mysql2
  * URL format: mysql://user:pass@host:port/database
  */
-import { MYSQL_DIALECT, buildInsert, buildSetClause, buildWhereClause, quoteIdentifierWith } from "./sqlDialect.js";
+import { MYSQL_DIALECT, quoteIdentifierWith } from "./sqlDialect.js";
+import { buildDelete, buildInsertRow, buildInsertRows, buildUpdate } from "./sqlCrud.js";
 import type { DatabaseAdapter, DatabaseResult, ColumnInfo, FieldDefinition } from "../types.js";
 import { SQLTranslator } from "../sqlTranslator.js";
 import { connectTarget, connectTimeoutMillis, driverConnectTimeoutMillis, withConnectTimeout } from "../connectTimeout.js";
@@ -263,12 +264,10 @@ export class MysqlAdapter implements DatabaseAdapter {
     // executeManyAsync (ONE connection). See PostgresAdapter for the rationale;
     // without this branch a list crashed/mis-built SQL via Object.keys() on the array.
     if (Array.isArray(data)) {
-      if (data.length === 0) return { success: true, affectedRows: 0 };
-      const keys = Object.keys(data[0]);
-      const sql = buildInsert(MYSQL_DIALECT, table, keys);
-      const paramsList = data.map((row) => keys.map((k) => row[k]));
+      const batch = buildInsertRows(MYSQL_DIALECT, table, data);
+      if (!batch) return { success: true, affectedRows: 0 };
       try {
-        const result = await this.executeManyAsync(sql, paramsList);
+        const result = await this.executeManyAsync(batch.sql, batch.paramsList);
         if (result.lastId !== undefined) this._lastInsertId = result.lastId;
         return { success: true, affectedRows: result.totalAffected, lastId: result.lastId };
       } catch (e) {
@@ -276,9 +275,7 @@ export class MysqlAdapter implements DatabaseAdapter {
       }
     }
 
-    const keys = Object.keys(data);
-    const sql = buildInsert(MYSQL_DIALECT, table, keys);
-    const values = Object.values(data);
+    const { sql, values } = buildInsertRow(MYSQL_DIALECT, table, data);
 
     try {
       const result = await this.queryPromise(sql, values);
@@ -299,28 +296,9 @@ export class MysqlAdapter implements DatabaseAdapter {
 
   async updateAsync(table: string, data: Record<string, unknown>, filter: Record<string, unknown> | string, params?: unknown[]): Promise<DatabaseResult> {
     this.ensureConnected();
-    const setClauses = buildSetClause(MYSQL_DIALECT, Object.keys(data));
-
-    // A raw WHERE fragment + params is half the write_path contract's filter
-    // form. Without this branch Object.keys("id = ?") yields the STRING INDICES
-    // ["0","1",...], producing `WHERE \`0\` = ? AND \`1\` = ?` — MySQL then
-    // reports an unknown column '0'. MySQL already uses `?`, so the fragment
-    // needs no placeholder rewriting.
-    if (typeof filter === "string") {
-      const where = filter ? ` WHERE ${filter}` : "";
-      const sql = `UPDATE ${MYSQL_DIALECT.quote(table)} SET ${setClauses}${where}`;
-      const values = [...Object.values(data), ...(params ?? [])];
-      try {
-        const result = await this.queryPromise(sql, values);
-        return { success: true, affectedRows: result.affectedRows ?? 0 };
-      } catch (e) {
-        return { success: false, affectedRows: 0, error: (e as Error).message };
-      }
-    }
-
-    const whereClauses = buildWhereClause(MYSQL_DIALECT, Object.keys(filter));
-    const sql = `UPDATE ${MYSQL_DIALECT.quote(table)} SET ${setClauses} WHERE ${whereClauses}`;
-    const values = [...Object.values(data), ...Object.values(filter)];
+    // MySQL uses `?` markers natively, so a raw string filter needs no rewrite;
+    // the string vs hash branch and value assembly are the shared composer's.
+    const { sql, values } = buildUpdate(MYSQL_DIALECT, table, data, filter, params);
 
     try {
       const result = await this.queryPromise(sql, values);
@@ -336,24 +314,7 @@ export class MysqlAdapter implements DatabaseAdapter {
 
   async deleteAsync(table: string, filter: Record<string, unknown> | string, params?: unknown[]): Promise<DatabaseResult> {
     this.ensureConnected();
-
-    // See updateAsync: truncate() calls this with "1 = 1", which became
-    // `WHERE \`0\` = ? AND \`1\` = ? ...` — db.truncate() was broken outright.
-    if (typeof filter === "string") {
-      const sql = filter
-        ? `DELETE FROM \`${table}\` WHERE ${filter}`
-        : `DELETE FROM \`${table}\``;
-      try {
-        const result = await this.queryPromise(sql, params ?? []);
-        return { success: true, affectedRows: result.affectedRows ?? 0 };
-      } catch (e) {
-        return { success: false, affectedRows: 0, error: (e as Error).message };
-      }
-    }
-
-    const whereClauses = buildWhereClause(MYSQL_DIALECT, Object.keys(filter));
-    const sql = `DELETE FROM ${MYSQL_DIALECT.quote(table)} WHERE ${whereClauses}`;
-    const values = Object.values(filter);
+    const { sql, values } = buildDelete(MYSQL_DIALECT, table, filter, params);
 
     try {
       const result = await this.queryPromise(sql, values);
