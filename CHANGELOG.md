@@ -6,6 +6,13 @@ number means the same thing everywhere.
 **The authoritative release notes for every shipped version live in the documentation:**
 https://tina4.com/nodejs/36-releases
 
+## 3.13.141 — 2026-09-29
+
+A hardening release. A committed symlink is a quiet menace: it breaks extraction on Windows and on Composer-style unpackers, and it hands an attacker a path out of the tree. The sibling `tina4-php` learned this the hard way when 134 absolute symlinks slipped in and broke `composer install` on Windows. Node carries none today, so this guard is preventive parity - it stands at the door of every pull request and refuses to let the first one in. The gate reads `git ls-files`, watches for anything git recorded as mode `120000`, and fails the build with the offending path named. It proves itself first: the self-test stages a real symlink in a throwaway repository, confirms the guard goes red, then confirms it goes green on the live tree.
+
+**CI**
+- No-committed-symlinks guard (`scripts/check-no-symlinks.sh`) wired into the doc-drift workflow, with a mutation-proof test (`test/checkNoSymlinks.test.ts`) that stages a real symlink and asserts the guard fails. Parity with the php Windows/Composer fix.
+
 ## 3.13.140 — 2026-09-28
 
 The doc-drift gate now stands at the door of every pull request. It reads the live export surface straight from each package barrel, and it fails the build the moment the packaged CLAUDE.md documents a `@tina4` import the code no longer hands out. The ORM CRUD write path stops repeating itself too: one shared SQL composer builds every insert, update and delete, and all six engines route through it.
