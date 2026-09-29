@@ -38,3 +38,13 @@ jobs:
 
       - name: Audit packaged CLAUDE.md against the live exports
         run: npx tsx scripts/auditDocDrift.ts --strict
+
+      # No committed symlinks. A committed symlink breaks extraction on Windows
+      # and Composer-style unpackers and is a supply-chain hazard (tina4-php
+      # shipped 134 that broke Windows installs). Prove the guard is a real gate
+      # (RED on a staged symlink, GREEN on the live tree) before trusting it.
+      - name: Symlink guard self-test (mutation-proof)
+        run: npx tsx test/checkNoSymlinks.test.ts
+
+      - name: Check for committed symlinks
+        run: sh scripts/check-no-symlinks.sh
