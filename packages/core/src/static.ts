@@ -10,6 +10,7 @@ import { readFileSync, realpathSync, statSync, type Stats } from "node:fs";
 import { join, extname, sep } from "node:path";
 import { gzipSync } from "node:zlib";
 import type { Tina4Request, Tina4Response } from "./types.js";
+import { etagMatches } from "./etag.js";
 
 /** Content-type prefixes that benefit from gzip. Mirrors the Python master's `_is_compressible`. */
 const COMPRESSIBLE_PREFIXES = [
@@ -200,16 +201,3 @@ function isNotModified(req: Tina4Request, etag: string, stat: Stats): boolean {
   return false;
 }
 
-/**
- * Weak comparison of an `If-None-Match` value against our ETag. The header may
- * be `*`, a single tag, or a comma-separated list; the `W/` weak prefix is
- * stripped on both sides before comparing (RFC 7232 §2.3.2 weak comparison).
- */
-function etagMatches(ifNoneMatch: string, etag: string): boolean {
-  const strip = (tag: string) => tag.trim().replace(/^W\//, "");
-  const target = strip(etag);
-  return ifNoneMatch.split(",").some((candidate) => {
-    const trimmed = candidate.trim();
-    return trimmed === "*" || strip(trimmed) === target;
-  });
-}

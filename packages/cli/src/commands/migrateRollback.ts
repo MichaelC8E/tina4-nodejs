@@ -18,6 +18,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 import { resolve } from "node:path";
 import { loadEnv } from "../../../core/src/dotenv.js";
+import { initDatabaseOrExit } from "../util.js";
 
 export async function migrateRollback(migrationDir?: string): Promise<void> {
   // .env must load before initDatabase() — otherwise DATABASE_URL from the
@@ -45,12 +46,7 @@ export async function migrateRollback(migrationDir?: string): Promise<void> {
   // Ensure database is initialised — MUST await; initDatabase() is async
   // and calls setAdapter() inside the promise. Without await, the next call
   // to getAdapter() throws "No database adapter configured."
-  try {
-    await initDatabase();
-  } catch (err) {
-    console.error(`  Error initialising database: ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(1);
-  }
+  await initDatabaseOrExit(initDatabase);
 
   await ensureMigrationTable();
 

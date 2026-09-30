@@ -37,7 +37,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdir
 import { join } from "node:path";
 import { Log } from "./logger.js";
 import { isTruthy } from "./dotenv.js";
-import { respCommandSync } from "./sessionHandlers/respClient.js";
+import { RespSessionHandler } from "./sessionHandlers/respSessionHandler.js";
 import { ValkeySessionHandler } from "./sessionHandlers/valkeyHandler.js";
 import { MemcachedSessionHandler } from "./sessionHandlers/memcachedHandler.js";
 import { MongoSessionHandler } from "./sessionHandlers/mongoHandler.js";
@@ -304,74 +304,30 @@ export class FileSessionHandler implements SessionHandler {
  *
  * Or pass via SessionConfig.
  */
-export class RedisSessionHandler implements SessionHandler {
-  private host: string;
-  private port: number;
-  private password: string;
-  private prefix: string;
-  private db: number;
-
+export class RedisSessionHandler extends RespSessionHandler {
   constructor(config?: SessionConfig) {
-    this.host = config?.redisHost
-      ?? process.env.TINA4_SESSION_REDIS_HOST
-      ?? "127.0.0.1";
-    this.port = config?.redisPort
-      ?? (process.env.TINA4_SESSION_REDIS_PORT
-        ? parseInt(process.env.TINA4_SESSION_REDIS_PORT, 10)
-        : 6379);
-    this.password = config?.redisPassword
-      ?? process.env.TINA4_SESSION_REDIS_PASSWORD
-      ?? "";
-    this.prefix = config?.redisPrefix
-      ?? process.env.TINA4_SESSION_REDIS_PREFIX
-      ?? "tina4:session:";
-    this.db = config?.redisDb
-      ?? (process.env.TINA4_SESSION_REDIS_DB
-        ? parseInt(process.env.TINA4_SESSION_REDIS_DB, 10)
-        : 0);
-  }
-
-  /**
-   * Execute a Redis command synchronously against the live server.
-   *
-   * Delegates to the shared {@link respCommandSync} transport: a genuine key miss
-   * yields `""`, and a transport/connection FAILURE (server unreachable, rejected
-   * AUTH, timeout) THROWS so the Session boundary can distinguish "not found"
-   * (silent) from "backend failed" (log-loud + degrade). Backend-failure parity.
-   */
-  private execSync(args: string[]): string {
-    return respCommandSync(
-      { host: this.host, port: this.port, password: this.password, db: this.db },
-      args,
+    super(
+      {
+        host: config?.redisHost
+          ?? process.env.TINA4_SESSION_REDIS_HOST
+          ?? "127.0.0.1",
+        port: config?.redisPort
+          ?? (process.env.TINA4_SESSION_REDIS_PORT
+            ? parseInt(process.env.TINA4_SESSION_REDIS_PORT, 10)
+            : 6379),
+        password: config?.redisPassword
+          ?? process.env.TINA4_SESSION_REDIS_PASSWORD
+          ?? "",
+        prefix: config?.redisPrefix
+          ?? process.env.TINA4_SESSION_REDIS_PREFIX
+          ?? "tina4:session:",
+        db: config?.redisDb
+          ?? (process.env.TINA4_SESSION_REDIS_DB
+            ? parseInt(process.env.TINA4_SESSION_REDIS_DB, 10)
+            : 0),
+      },
       "Redis",
     );
-  }
-
-  private key(sessionId: string): string {
-    return `${this.prefix}${sessionId}`;
-  }
-
-  read(sessionId: string): SessionData | null {
-    const raw = this.execSync(["GET", this.key(sessionId)]);
-    if (!raw) return null;     // key miss — normal "no session yet", NOT an error
-    try {
-      return JSON.parse(raw) as SessionData;
-    } catch {
-      return null;
-    }
-  }
-
-  write(sessionId: string, data: SessionData, ttl: number = 0): void {
-    const json = JSON.stringify(data);
-    if (ttl > 0) {
-      this.execSync(["SETEX", this.key(sessionId), String(ttl), json]);
-    } else {
-      this.execSync(["SET", this.key(sessionId), json]);
-    }
-  }
-
-  destroy(sessionId: string): void {
-    this.execSync(["DEL", this.key(sessionId)]);
   }
 }
 

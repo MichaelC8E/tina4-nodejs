@@ -42,6 +42,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
+import { parseFlags } from "../util.js";
 
 // ── Field type mapping ──────────────────────────────────────────────
 const FIELD_TYPE_MAP: Record<string, { orm: string; sql: string; defaultVal: string }> = {
@@ -558,28 +559,7 @@ export function parseCliArgs(args: string[]): { flags: Record<string, string | b
     "json", "dry-run",
   ]);
 
-  const flags: Record<string, string | boolean> = {};
-  const positional: string[] = [];
-  let i = 0;
-  while (i < args.length) {
-    if (args[i].startsWith("--")) {
-      const key = args[i].slice(2);
-      if (booleanFlags.has(key)) {
-        flags[key] = true;
-        i += 1;
-      } else if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
-        flags[key] = args[i + 1];
-        i += 2;
-      } else {
-        flags[key] = true;
-        i += 1;
-      }
-    } else {
-      positional.push(args[i]);
-      i += 1;
-    }
-  }
-  return { flags, positional };
+  return parseFlags(args, booleanFlags);
 }
 
 /**

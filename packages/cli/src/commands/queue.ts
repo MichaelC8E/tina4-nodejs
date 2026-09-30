@@ -28,6 +28,7 @@ import { pathToFileURL } from "node:url";
 import { loadEnv } from "../../../core/src/dotenv.js";
 import { Queue } from "../../../core/src/queue.js";
 import type { QueueJob } from "../../../core/src/job.js";
+import { parseFlags as parseFlagsShared } from "../util.js";
 
 // ── Flag parsing ─────────────────────────────────────────────────────
 //
@@ -36,36 +37,7 @@ import type { QueueJob } from "../../../core/src/job.js";
 
 const BOOLEAN_FLAGS = new Set(["once", "json"]);
 
-interface ParsedFlags {
-  flags: Record<string, string | boolean>;
-  positional: string[];
-}
-
-function parseFlags(args: string[]): ParsedFlags {
-  const flags: Record<string, string | boolean> = {};
-  const positional: string[] = [];
-  let i = 0;
-  while (i < args.length) {
-    const arg = args[i];
-    if (arg.startsWith("--")) {
-      const key = arg.slice(2);
-      if (BOOLEAN_FLAGS.has(key)) {
-        flags[key] = true;
-        i += 1;
-      } else if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
-        flags[key] = args[i + 1];
-        i += 2;
-      } else {
-        flags[key] = true;
-        i += 1;
-      }
-    } else {
-      positional.push(arg);
-      i += 1;
-    }
-  }
-  return { flags, positional };
-}
+const parseFlags = (args: string[]) => parseFlagsShared(args, BOOLEAN_FLAGS);
 
 /** A per-job handler declared by a consumer module (receives the job payload). */
 export type QueueHandler = (payload: unknown) => unknown | Promise<unknown>;

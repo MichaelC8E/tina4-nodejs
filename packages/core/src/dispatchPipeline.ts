@@ -42,6 +42,7 @@ import { createHash } from "node:crypto";
 import type { Tina4Request } from "./types.js";
 import type { Session as SessionInstance } from "./session.js";
 import { Log } from "./logger.js";
+import { etagMatches } from "./etag.js";
 
 /**
  * The prologue, in order. Exported as DATA so the pipeline can be asserted and
@@ -197,23 +198,6 @@ function isCompressibleContentType(contentType: string): boolean {
   return COMPRESSIBLE_PREFIXES.some((prefix) => contentType.includes(prefix));
 }
 
-/**
- * Match an If-None-Match header value against `etag` (RFC 7232 S3.2 weak
- * comparison): an optional W/ prefix is ignored on both sides, the header may
- * carry a comma-separated candidate list, and `*` matches any current
- * representation. Same algorithm as static.ts's own matcher (kept local here
- * rather than imported, since static.ts writes to the raw response directly
- * and never reaches this interceptor).
- */
-function etagMatchesInm(ifNoneMatch: string, etag: string): boolean {
-  const strip = (tag: string) => tag.trim().replace(/^W\//, "");
-  const target = strip(etag);
-  return ifNoneMatch.split(",").some((candidate) => {
-    const trimmed = candidate.trim();
-    return trimmed === "*" || strip(trimmed) === target;
-  });
-}
-
 function maybeCompressResponse(body: Buffer, rawReq: IncomingMessage, rawRes: ServerResponse): Buffer {
   const acceptEncoding = String(rawReq.headers["accept-encoding"] ?? "");
   const contentTypeHeader = rawRes.getHeader("content-type");
@@ -230,7 +214,7 @@ function maybeCompressResponse(body: Buffer, rawReq: IncomingMessage, rawRes: Se
 
 function responseIsNotModified(rawReq: IncomingMessage, rawRes: ServerResponse, etag: string): boolean {
   const ifNoneMatch = String(rawReq.headers["if-none-match"] ?? "");
-  if (ifNoneMatch) return etagMatchesInm(ifNoneMatch, etag);
+  if (ifNoneMatch) return etagMatches(ifNoneMatch, etag);
   const lastModifiedHeader = rawRes.getHeader("last-modified");
   if (typeof lastModifiedHeader !== "string") return false;
   const ifModifiedSince = String(rawReq.headers["if-modified-since"] ?? "");

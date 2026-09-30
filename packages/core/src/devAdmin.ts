@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import type { Router } from "./router.js";
 import type { RouteHandler, Tina4Request } from "./types.js";
 import { DevMailbox } from "./devMailbox.js";
+import { relayUpstreamResponse } from "./upstreamResponse.js";
 import { isTruthy } from "./dotenv.js";
 import { fullAnalysis, fileDetail, MetricsEngineError, metricsScanRoot } from "./metrics.js";
 import { registerFeedbackRoutes } from "./feedback.js";
@@ -1682,18 +1683,8 @@ async function proxyToSupervisor(
 
   clearTimeout(timer);
 
-  // JSON / other — drain the body and return as before.
-  const raw = await upstream.text();
-  const status = upstream.status || 200;
-  try {
-    res.json(JSON.parse(raw), status);
-  } catch {
-    // Non-JSON upstream — pass through as text with the same status.
-    res.raw.writeHead(status, {
-      "Content-Type": upstream.headers.get("content-type") ?? "text/plain; charset=utf-8",
-    });
-    res.raw.end(raw);
-  }
+  // JSON / other — drain the body and relay with the upstream status.
+  await relayUpstreamResponse(res, upstream);
 }
 
 // -- Framework-grounding (mcp.tina4.com) token config --
