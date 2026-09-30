@@ -321,6 +321,33 @@ export function parseFrame(
   return { fin: !!fin, opcode, payload: Buffer.from(payload), bytesConsumed: offset + payloadLen };
 }
 
+/**
+ * Reassembles fragmented messages (RFC 6455 section 5.4). A browser sends a large message - a pasted image in a chat,
+ * base64 inside JSON - as a TEXT or BINARY frame with FIN clear, then CONTINUATION frames; control frames may arrive
+ * between the pieces. Returns a complete message when one is done, a control frame as it comes, and null while a
+ * message is still arriving. A CONTINUATION with no message started is dropped. Mirrors the Python master
+ * (tina4_python.websocket _handle_frame). One per connection.
+ */
+export class MessageAssembler {
+  private parts: Buffer[] = [];
+  private opcode = 0;
+
+  push(frame: { fin: boolean; opcode: number; payload: Buffer }): { opcode: number; payload: Buffer } | null {
+    if (frame.opcode >= 0x8) return { opcode: frame.opcode, payload: frame.payload }; // control frames are never fragmented
+    if (frame.opcode === OP_CONTINUATION) {
+      if (!this.opcode) return null;
+      this.parts.push(frame.payload);
+      if (!frame.fin) return null;
+      const whole = { opcode: this.opcode, payload: Buffer.concat(this.parts) };
+      this.parts = []; this.opcode = 0;
+      return whole;
+    }
+    if (frame.fin) { this.parts = []; this.opcode = 0; return { opcode: frame.opcode, payload: frame.payload }; }
+    this.opcode = frame.opcode; this.parts = [frame.payload];
+    return null;
+  }
+}
+
 // ── WebSocket Server ─────────────────────────────────────────
 
 export class WebSocketServer {
@@ -854,6 +881,13 @@ export class WebSocketServer {
     });
   }
 
+  private readonly assemblers = new WeakMap<WebSocketClient, MessageAssembler>();
+  private assemblerFor(client: WebSocketClient): MessageAssembler {
+    let a = this.assemblers.get(client);
+    if (!a) { a = new MessageAssembler(); this.assemblers.set(client, a); }
+    return a;
+  }
+
   private processBuffer(
     client: WebSocketClient,
     buffer: Buffer,
@@ -868,17 +902,20 @@ export class WebSocketServer {
       remaining = remaining.subarray(frame.bytesConsumed);
       client.lastActivity = Date.now(); // mark activity for the idle reaper
 
-      switch (frame.opcode) {
+      // a fragmented message is delivered once, whole (MessageAssembler)
+      const whole = this.assemblerFor(client).push(frame);
+      if (!whole) continue;
+      switch (whole.opcode) {
         case OP_TEXT:
-          this.emit("message", client, frame.payload.toString("utf-8"));
+          this.emit("message", client, whole.payload.toString("utf-8"));
           break;
 
         case OP_BINARY:
-          this.emit("message", client, frame.payload);
+          this.emit("message", client, whole.payload);
           break;
 
         case OP_PING: {
-          const pongFrame = buildFrame(OP_PONG, frame.payload);
+          const pongFrame = buildFrame(OP_PONG, whole.payload);
           try {
             client.socket.write(pongFrame);
           } catch {
@@ -1243,15 +1280,19 @@ export function serveWebSocketRoute(req: IncomingMessage, socket: Socket, head: 
       .finally(() => wsRouteManager.remove(conn.id));
   };
 
+  const assembler = new MessageAssembler();
   socket.on("data", (chunk: Buffer) => {
     buffer = Buffer.concat([buffer, chunk]);
     while (buffer.length > 0) {
       const frame = parseFrame(buffer);
       if (!frame) break;
       buffer = buffer.subarray(frame.bytesConsumed);
-      switch (frame.opcode) {
+      // a fragmented message is delivered once, whole (MessageAssembler)
+      const whole = assembler.push(frame);
+      if (!whole) continue;
+      switch (whole.opcode) {
         case OP_TEXT: {
-          const text = frame.payload.toString("utf-8");
+          const text = whole.payload.toString("utf-8");
           void Promise.resolve()
             .then(() => (conn._onMessage ? conn._onMessage(text) : handler(conn, "message", text)))
             .catch((e) => Log.error(`WebSocket message handler error: ${(e as Error).message}`));
@@ -1259,7 +1300,7 @@ export function serveWebSocketRoute(req: IncomingMessage, socket: Socket, head: 
         }
         case OP_PING:
           try {
-            socket.write(buildFrame(OP_PONG, frame.payload));
+            socket.write(buildFrame(OP_PONG, whole.payload));
           } catch {
             /* client gone */
           }
