@@ -23,6 +23,12 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
  * query() is rejected by Ultipa.
  */
 import { GraphNode, GraphEdge, GraphResult } from "../shapes.js";
+import {
+  errorMessage,
+  nodeFromRow as toGraphNode,
+  edgeFromRow as toGraphEdge,
+  type DriverRow,
+} from "./rowMapping.js";
 import { GraphError, GraphConnectTimeout } from "../errors.js";
 import {
   resolveGraphConnectTimeout,
@@ -56,16 +62,6 @@ const UltipaConnectError = driver.UltipaConnectError;
  */
 const UNBOUNDED_CONNECT_SECONDS = 315_360_000; // ~10 years
 
-interface DriverRow {
-  id?: unknown;
-  labels?: unknown;
-  props?: unknown;
-  type?: unknown;
-  f?: unknown;
-  t?: unknown;
-  [key: string]: unknown;
-}
-
 /**
  * Build a GQL property map `{k1: $p_k1, ...}` plus the param dict for it.
  *
@@ -82,11 +78,6 @@ function propClause(
   const params: Record<string, unknown> = {};
   for (const key of keys) params[`p_${key}`] = props[key];
   return { clause: `{${pairs}}`, params };
-}
-
-function errorMessage(exc: unknown): string {
-  if (exc instanceof Error) return exc.message;
-  return String(exc);
 }
 
 export class UltipaGraphAdapter implements GraphAdapter {
@@ -154,12 +145,7 @@ export class UltipaGraphAdapter implements GraphAdapter {
 
   // -- portable node/edge/traverse core (GQL) ----------------------------
   private nodeFromRow(row: DriverRow | undefined | null): GraphNode | null {
-    if (row === null || row === undefined) return null;
-    return new GraphNode(
-      String(row.id),
-      (row.labels as string[]) ?? [],
-      (row.props as Record<string, unknown>) ?? {},
-    );
+    return toGraphNode(row);
   }
 
   async addNode(
@@ -190,15 +176,7 @@ export class UltipaGraphAdapter implements GraphAdapter {
       + `INSERT (a)-[e:\`${type}\` ${clause}]->(b) `
       + `RETURN id(e) AS id, type(e) AS type, id(a) AS f, id(b) AS t, properties(e) AS props`;
     const rows = (await this.run(gql, params, false)).dicts() as DriverRow[];
-    if (rows.length === 0) return null;
-    const row = rows[0];
-    return new GraphEdge(
-      String(row.id),
-      String(row.type),
-      String(row.f),
-      String(row.t),
-      (row.props as Record<string, unknown>) ?? {},
-    );
+    return toGraphEdge(rows[0]);
   }
 
   async getNode(nodeId: string): Promise<GraphNode | null> {

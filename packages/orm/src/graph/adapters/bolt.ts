@@ -26,6 +26,12 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
  * them as strings, so a Cypher `WHERE id(n) = $id` is fed `Number(id)` back.
  */
 import { GraphNode, GraphEdge, GraphResult } from "../shapes.js";
+import {
+  errorMessage,
+  nodeFromRow as toGraphNode,
+  edgeFromRow as toGraphEdge,
+  type DriverRow,
+} from "./rowMapping.js";
 import { GraphError, GraphConnectTimeout } from "../errors.js";
 import {
   resolveGraphConnectTimeout,
@@ -52,20 +58,6 @@ const driverModule: any = await import(DRIVER_PACKAGE);
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const neo4j: any = driverModule.default ?? driverModule;
 
-interface DriverRow {
-  id?: unknown;
-  labels?: unknown;
-  props?: unknown;
-  type?: unknown;
-  f?: unknown;
-  t?: unknown;
-  [key: string]: unknown;
-}
-
-function errorMessage(exc: unknown): string {
-  if (exc instanceof Error) return exc.message;
-  return String(exc);
-}
 
 /**
  * A neutral GraphNode id back to the engine's integer form. Non-numeric ids
@@ -151,12 +143,7 @@ export class BoltGraphAdapter implements GraphAdapter {
 
   // -- portable node/edge/traverse core (Cypher) -------------------------
   private nodeFromRow(row: DriverRow | undefined | null): GraphNode | null {
-    if (row === null || row === undefined) return null;
-    return new GraphNode(
-      String(row.id),
-      (row.labels as string[]) ?? [],
-      (row.props as Record<string, unknown>) ?? {},
-    );
+    return toGraphNode(row);
   }
 
   async addNode(
@@ -185,15 +172,7 @@ export class BoltGraphAdapter implements GraphAdapter {
       to_id: boltId(toId),
       props: properties ?? {},
     });
-    if (rows.length === 0) return null;
-    const row = rows[0];
-    return new GraphEdge(
-      String(row.id),
-      String(row.type),
-      String(row.f),
-      String(row.t),
-      (row.props as Record<string, unknown>) ?? {},
-    );
+    return toGraphEdge(rows[0]);
   }
 
   async getNode(nodeId: string): Promise<GraphNode | null> {

@@ -24,27 +24,11 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { basename, delimiter, join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { parseFlags as parseFlagsShared } from "../util.js";
 
 /** Parse --key value / bare --flag (build only needs --tag and --file values). */
 function parseFlags(args: string[]): Record<string, string | boolean> {
-  const flags: Record<string, string | boolean> = {};
-  let i = 0;
-  while (i < args.length) {
-    const arg = args[i];
-    if (arg.startsWith("--")) {
-      const key = arg.slice(2);
-      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
-        flags[key] = args[i + 1];
-        i += 2;
-      } else {
-        flags[key] = true;
-        i += 1;
-      }
-    } else {
-      i += 1;
-    }
-  }
-  return flags;
+  return parseFlagsShared(args).flags;
 }
 
 /**

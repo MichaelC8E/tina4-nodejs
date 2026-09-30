@@ -36,6 +36,7 @@ import { fileURLToPath } from "node:url";
 
 import { authenticateRequest } from "./auth.js";
 import { supervisorBaseUrl } from "./devAdmin.js";
+import { relayUpstreamResponse } from "./upstreamResponse.js";
 import type { RouteHandler, Tina4Request } from "./types.js";
 import type { Router } from "./router.js";
 
@@ -221,17 +222,7 @@ export const handleFeedbackTurn: RouteHandler = async (req, res) => {
   }
   clearTimeout(timer);
 
-  const raw = await upstream.text();
-  const status = upstream.status || 200;
-  try {
-    res.json(JSON.parse(raw), status);
-  } catch {
-    res.raw.writeHead(status, {
-      "Content-Type":
-        upstream.headers.get("content-type") ?? "text/plain; charset=utf-8",
-    });
-    res.raw.end(raw);
-  }
+  await relayUpstreamResponse(res, upstream);
 };
 
 // Widget bundle lives at packages/core/src/__feedback/widget.js so that

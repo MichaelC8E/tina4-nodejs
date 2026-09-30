@@ -29,6 +29,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadEnv } from "../../../core/src/dotenv.js";
+import { initDatabaseOrExit } from "../util.js";
 
 export async function runMigrations(migrationDir?: string): Promise<void> {
   // Load .env before initialising the DB so DATABASE_URL/TINA4_DATABASE_URL
@@ -59,12 +60,7 @@ export async function runMigrations(migrationDir?: string): Promise<void> {
   // async — MUST be awaited, otherwise setAdapter() has not run by the time
   // migrate() asks for the adapter and the whole CLI crashes with
   // "No database adapter configured."
-  try {
-    await initDatabase();
-  } catch (err) {
-    console.error(`  Error initialising database: ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(1);
-  }
+  await initDatabaseOrExit(initDatabase);
 
   const result = await migrate(undefined, { migrationsDir: dir });
 

@@ -43,7 +43,8 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { delimiter, dirname, join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
+import { findOnPath } from "../util.js";
 import { spawnSync } from "node:child_process";
 
 // Source extensions we count as lintable app code. `.d.ts` declaration files are
@@ -217,18 +218,7 @@ function hasPackage(cwd: string, pkg: string): boolean {
 function resolveNpm(): string | null {
   const windows = process.platform === "win32";
   const names = windows ? ["npm.cmd", "npm.exe", "npm"] : ["npm"];
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-    if (!dir) continue;
-    for (const name of names) {
-      const candidate = join(dir, name);
-      try {
-        if (statSync(candidate).isFile()) return candidate;
-      } catch {
-        // not there — keep looking
-      }
-    }
-  }
-  return null;
+  return findOnPath(names);
 }
 
 interface EslintSetup {

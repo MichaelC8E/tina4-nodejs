@@ -20,8 +20,9 @@ import { runSeeds } from "./commands/seed.js";
 import { queueCommand, QUEUE_SUBCOMMAND_NAMES } from "./commands/queue.js";
 import { buildImage } from "./commands/build.js";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { findOnPath } from "./util.js";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 // ── Version (cheap, side-effect-free) ───────────────────────────────
@@ -496,18 +497,7 @@ function findClient(): string | null {
   const names = windows
     ? [`${CLIENT_BINARY}.exe`, `${CLIENT_BINARY}.cmd`, `${CLIENT_BINARY}.bat`]
     : [CLIENT_BINARY];
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-    if (!dir) continue;
-    for (const name of names) {
-      const candidate = join(dir, name);
-      try {
-        if (statSync(candidate).isFile()) return candidate;
-      } catch {
-        // not there — keep looking
-      }
-    }
-  }
-  return null;
+  return findOnPath(names);
 }
 
 /**

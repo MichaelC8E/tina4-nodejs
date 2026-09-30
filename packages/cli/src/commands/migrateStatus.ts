@@ -15,6 +15,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 import { resolve } from "node:path";
 import { loadEnv } from "../../../core/src/dotenv.js";
+import { initDatabaseOrExit } from "../util.js";
 
 export async function migrateStatus(migrationDir?: string): Promise<void> {
   // .env must load before initDatabase() so the project's DATABASE_URL is seen.
@@ -38,12 +39,7 @@ export async function migrateStatus(migrationDir?: string): Promise<void> {
 
   // Ensure database is initialised — MUST await; initDatabase() is async
   // and calls setAdapter() inside. Without await, getAdapter() throws.
-  try {
-    await initDatabase();
-  } catch (err) {
-    console.error(`  Error initialising database: ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(1);
-  }
+  await initDatabaseOrExit(initDatabase);
 
   ensureMigrationTable();
 
