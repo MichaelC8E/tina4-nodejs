@@ -38,3 +38,14 @@ export async function getQueueDb(): Promise<DatabaseAdapter> {
 export function now(): string {
   return new Date().toISOString();
 }
+
+/**
+ * Claim the next pending message for a topic — highest priority first, then
+ * the oldest (lowest id). The `LIMIT 1` bounds the work: without it SQLite
+ * sorts the WHOLE pending backlog on every consume call before `fetchOne`
+ * reads a single row (carbonah E003, an unbounded query on a hot path). One
+ * row asked for, one row returned. Shared by the consume and fail routes so
+ * the claim query lives in exactly one place.
+ */
+export const CLAIM_NEXT_PENDING_SQL =
+  "SELECT * FROM tina4_queue WHERE topic = ? AND status = 'pending' AND available_at <= ? ORDER BY priority DESC, id ASC LIMIT 1";

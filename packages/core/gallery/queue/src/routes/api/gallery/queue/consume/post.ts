@@ -8,17 +8,14 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 /** Gallery: Queue — consume (complete) the next pending message. */
 import type { Tina4Request, Tina4Response } from "tina4-nodejs";
-import { getQueueDb, now } from "../../../../lib/queueDb.js";
+import { getQueueDb, now, CLAIM_NEXT_PENDING_SQL } from "../../../../lib/queueDb.js";
 
 export default async function (_req: Tina4Request, res: Tina4Response) {
   try {
     const db = await getQueueDb();
     const ts = now();
 
-    const row = db.fetchOne<Record<string, unknown>>(
-      "SELECT * FROM tina4_queue WHERE topic = ? AND status = 'pending' AND available_at <= ? ORDER BY priority DESC, id ASC",
-      ["gallery-tasks", ts]
-    );
+    const row = db.fetchOne<Record<string, unknown>>(CLAIM_NEXT_PENDING_SQL, ["gallery-tasks", ts]);
 
     if (!row) {
       return res.json({ consumed: false, message: "No pending messages to consume" });
