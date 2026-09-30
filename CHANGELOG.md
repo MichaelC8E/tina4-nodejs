@@ -6,6 +6,25 @@ number means the same thing everywhere.
 **The authoritative release notes for every shipped version live in the documentation:**
 https://tina4.com/nodejs/36-releases
 
+## 3.13.142 — 2026-09-30
+
+A correctness-and-efficiency release. A fragmented WebSocket message no longer arrives in pieces: the frame reader waits for every continuation frame and hands the application one whole message, the way RFC 6455 §5.4 says it should. The queue stops reading the whole shelf when it only wants the next job, and a session that regenerates mid-request remembers to re-send its cookie. The rest is housekeeping the codebase has been asking for - duplicated logic pulled into shared homes, complexity trimmed, and a metrics gate that now refuses to let a regression through.
+
+**Fixes**
+- WebSocket fragmentation (#101): a message split across continuation frames is reassembled whole before delivery (RFC 6455 §5.4) - a partial frame no longer reaches the handler on its own.
+- Session regenerate (#104): `regenerate()` called mid-request re-emits the session cookie, so the new id reaches the browser. Parity with tina4-php#253.
+
+**Performance**
+- Queue claim (#103): the claim SELECT is bounded with `LIMIT 1`, so popping the next job no longer scans the whole pending set (~−65% SCI, carbonah E003).
+
+**Internal**
+- Cross-file dedup (#102): shared helpers extracted for duplicated logic across the core, with the lazy-loading barrel ceiling raised to match their new shared homes.
+- Cyclomatic-complexity reductions across the flagged modules.
+
+**CI**
+- Metrics ratchet (#106): `tina4 metrics --fail-on-regression` wired as a gate with a committed baseline, so a new complexity or duplication offender fails the build (ADR-0002).
+- Env contract (#105): `TINA4_TEST_NATS_URL` added to the canonical env set (ADR-0038).
+
 ## 3.13.141 — 2026-09-29
 
 A hardening release. A committed symlink is a quiet menace: it breaks extraction on Windows and on Composer-style unpackers, and it hands an attacker a path out of the tree. The sibling `tina4-php` learned this the hard way when 134 absolute symlinks slipped in and broke `composer install` on Windows. Node carries none today, so this guard is preventive parity - it stands at the door of every pull request and refuses to let the first one in. The gate reads `git ls-files`, watches for anything git recorded as mode `120000`, and fails the build with the offending path named. It proves itself first: the self-test stages a real symlink in a throwaway repository, confirms the guard goes red, then confirms it goes green on the live tree.
