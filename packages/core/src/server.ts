@@ -2393,10 +2393,21 @@ export async function startServer(config?: Tina4Config): Promise<{
         });
 
         aiServer.on("error", (err: any) => {
-          if (err.code === "EADDRINUSE") {
+          // The auxiliary AI/test port is a debug convenience, never
+          // load-bearing: ANY bind failure must degrade to no-aux-port, logged
+          // LOUD, never silent. The old handler logged only EADDRINUSE and
+          // silently swallowed every other code (EADDRNOTAVAIL, EACCES, ...),
+          // leaving `aiServer` a dangling non-listening object. The 'error'
+          // listener's presence already stops Node throwing, so the main server
+          // never crashes; this just makes the degrade visible and resets the
+          // handle on every failure. (The synchronous ERR_SOCKET_BAD_PORT for
+          // an out-of-range derived port is handled separately by aiPortInRange.)
+          if (err?.code === "EADDRINUSE") {
             Log.warning(`Test port ${testPort} in use — skipping`);
-            aiServer = null;
+          } else {
+            Log.error(`Test port ${testPort} bind failed (${err?.code ?? err}) — skipping`);
           }
+          aiServer = null;
         });
 
         aiServer.listen(testPort, host);
