@@ -6,6 +6,10 @@ number means the same thing everywhere.
 **The authoritative release notes for every shipped version live in the documentation:**
 https://tina4.com/nodejs/36-releases
 
+## 3.13.143 — 2026-10-01
+
+A fresh project's own styling now loads under the strict default Content-Security-Policy. The framework serves `default-src 'self'`, which a browser enforces by refusing every inline `<style>` and `<script>` -- so a new project rendered unstyled with its scripts blocked. The framework now mints one nonce per response, injects it into the `style-src` and `script-src` directives, and stamps it on every inline block it emits, de-inlining the `style=` and `on*=` attributes it used to rely on; a template that needs an inline block stamps `csp_nonce()` on it (ADR-0088, #110). A session's expiry now slides on activity: a read-only request that touched a stored session re-writes the merged record to move the deadline forward, so a request in flight next to a logout no longer loses the wrong state (ADR-0087, #108). Internally, the loop-block watchdog test's readiness probe now waits for a real HTTP response instead of a bare TCP connect, so a port-takeover gap can no longer surface as a `fetch failed` -- a continuous-integration flake fix with no runtime change (#111). The framework still has no required runtime dependencies.
+
 ## 3.13.142 — 2026-09-30
 
 A correctness-and-efficiency release. A fragmented WebSocket message no longer arrives in pieces: the frame reader waits for every continuation frame and hands the application one whole message, the way RFC 6455 §5.4 says it should. The queue stops reading the whole shelf when it only wants the next job, and a session that regenerates mid-request remembers to re-send its cookie. The rest is housekeeping the codebase has been asking for - duplicated logic pulled into shared homes, complexity trimmed, and a metrics gate that now refuses to let a regression through.
