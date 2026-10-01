@@ -335,6 +335,28 @@ export class RedisSessionHandler extends RespSessionHandler {
 
 const FLASH_PREFIX = "_flash_";
 
+/**
+ * The stored form of a value, for telling whether a request changed it.
+ * undefined when it cannot be serialised (a BigInt, a cycle): that always
+ * counts as changed, because writing a value again is harmless and missing a
+ * change is not.
+ */
+function fingerprint(value: unknown): string | undefined {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function fingerprints(data: SessionData): Map<string, string | undefined> {
+  const prints = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(data)) {
+    prints.set(key, fingerprint(value));
+  }
+  return prints;
+}
+
 // ── Session Class ─────────────────────────────────────────────────
 
 export class Session {
@@ -361,6 +383,29 @@ export class Session {
    * Lets `start()` tell "no such session" from "the store is unreachable".
    */
   private lastReadFailed = false;
+  /**
+   * What this request last saw of the stored record, one fingerprint per key:
+   * taken by start() and again by every save. save() compares the live data
+   * against it to find the keys THIS request changed.
+   */
+  private loaded = new Map<string, string | undefined>();
+  /**
+   * True when this request is working on a record the store holds: start()
+   * adopted one, or a save has written one since. A save never re-creates such
+   * a record once another request has removed it.
+   */
+  private stored = false;
+  /**
+   * True when clear() ran since the last save: the save then replaces the
+   * stored record instead of merging into it.
+   */
+  private cleared = false;
+  /**
+   * True once this request found its session ended by another request (the
+   * record it loaded is gone). It stays ended for the rest of the request:
+   * regenerate() mints nothing either.
+   */
+  private ended = false;
 
   constructor(backend?: string, config?: SessionConfig) {
     const backendType = resolveBackend(
@@ -529,6 +574,11 @@ export class Session {
         const now = Math.floor(Date.now() / 1000);
         this.data = { _created: now, _accessed: now };
         this.dirty = false;
+        // Not a record this request has seen, so its first save writes whole.
+        this.stored = false;
+        this.loaded = new Map();
+        this.cleared = false;
+        this.ended = false;
         return sessionId;
       }
       if (loaded) {
@@ -552,6 +602,10 @@ export class Session {
         // Refresh the accessed timestamp; a write failure here is logged but
         // must not abort the resume — the request still serves.
         this.safeWrite(this.sessionId, this.data, this.ttl);
+        this.stored = true;
+        this.loaded = fingerprints(this.data);
+        this.cleared = false;
+        this.ended = false;
         return sessionId;
       }
     }
@@ -562,6 +616,10 @@ export class Session {
     this.data = { _created: now, _accessed: now };
     this.dirty = false;
     this.safeWrite(this.sessionId, this.data, this.ttl);
+    this.stored = false;
+    this.loaded = new Map();
+    this.cleared = false;
+    this.ended = false;
     return this.sessionId;
   }
 
@@ -606,9 +664,7 @@ export class Session {
     if (this.sessionId) {
       this.safeDestroy(this.sessionId);
     }
-    this.sessionId = null;
-    this.data = null;
-    this.dirty = false;
+    this.forget();
   }
 
   /**
@@ -633,6 +689,7 @@ export class Session {
     const now = Math.floor(Date.now() / 1000);
     this.data = { _created: this.data._created, _accessed: now };
     this.dirty = true;
+    this.cleared = true;
     this.save();
   }
 
@@ -651,8 +708,27 @@ export class Session {
    * session fixation — the pre-auth ID is destroyed and the data is carried
    * onto a fresh, unguessable ID. A backend destroy/write failure is logged
    * (never silent) but does not throw under the default policy.
+   *
+   * What is carried is the session as it is stored now with this request's
+   * own changes applied, the same merge save() does. If another request ended
+   * the session after this one loaded it (a logout, or a regenerate of its
+   * own), it stays ended: nothing is carried, no id is minted and null is
+   * returned, so no cookie goes out to replace the one that request sent.
    */
-  regenerate(): string {
+  regenerate(): string | null {
+    if (this.ended) return null;
+    if (this.sessionId && this.stored && this.data) {
+      const current = this.safeRead(this.sessionId);
+      if (!this.lastReadFailed) {
+        if (!current) {
+          this.forget();
+          this.ended = true;
+          return null;
+        }
+        if (!this.cleared) this.data = this.merged(current);
+      }
+    }
+
     const oldId = this.sessionId;
     const oldData = this.data;
 
@@ -666,6 +742,8 @@ export class Session {
     this.data = oldData ?? { _created: Math.floor(Date.now() / 1000), _accessed: Math.floor(Date.now() / 1000) };
     this.data._accessed = Math.floor(Date.now() / 1000);
     this.dirty = true;
+    // The new id has no record yet: write everything to it.
+    this.stored = false;
     this.save();
     return this.sessionId;
   }
@@ -750,15 +828,74 @@ export class Session {
    * Returns true on a successful persist, false if the backend was unreachable
    * (logged). The dirty flag is cleared only on success so a later save()
    * retries once the backend recovers. A nothing-to-persist call returns true.
+   *
+   * Other requests on the same session run while this one does, so the save
+   * writes only THIS request's changes, onto the record as it is stored now.
+   * Writing back the whole snapshot start() loaded undid whatever another
+   * request did in between: a logout (destroy, clear, regenerate) or a
+   * privilege change made with set(). A record removed since this request
+   * loaded it is never re-created: the session has ended, for this request
+   * too. A request that has not loaded a stored record (a new session, the new
+   * id regenerate() mints) writes its data whole, as before.
    */
   save(): boolean {
     if (!this.sessionId || !this.data) return true;
     if (!this.dirty) return true;
-    if (this.safeWrite(this.sessionId, this.data, this.ttl)) {
+    let record: SessionData = this.data;
+    if (this.stored) {
+      const current = this.safeRead(this.sessionId);
+      if (this.lastReadFailed) return false;  // nothing written; dirty RETAINED for retry
+      if (!current) {
+        this.forget();
+        this.ended = true;
+        return true;
+      }
+      if (!this.cleared) record = this.merged(current);
+    }
+    if (this.safeWrite(this.sessionId, record, this.ttl)) {
       this.dirty = false;
+      this.stored = true;
+      this.cleared = false;
+      this.loaded = fingerprints(this.data);
       return true;
     }
     return false;  // write failed (logged); dirty RETAINED for retry
+  }
+
+  /**
+   * The stored record with this request's changes applied: every key whose
+   * value differs from what this request loaded or last saved, and the
+   * removal of every key it deleted. Keys it did not touch keep whatever is
+   * stored now.
+   */
+  private merged(current: SessionData): SessionData {
+    const data = this.data as SessionData;
+    const record: SessionData = { ...current };
+    for (const [key, value] of Object.entries(data)) {
+      const print = fingerprint(value);
+      if (print === undefined || !this.loaded.has(key) || this.loaded.get(key) !== print) {
+        record[key] = value;
+      }
+    }
+    for (const key of this.loaded.keys()) {
+      if (!Object.prototype.hasOwnProperty.call(data, key)) {
+        delete record[key];
+      }
+    }
+    return record;
+  }
+
+  /**
+   * End the session for this request without touching the store: no id and
+   * no data, so nothing more is written and no cookie goes out for it.
+   */
+  private forget(): void {
+    this.sessionId = null;
+    this.data = null;
+    this.dirty = false;
+    this.stored = false;
+    this.cleared = false;
+    this.loaded = new Map();
   }
 }
 
