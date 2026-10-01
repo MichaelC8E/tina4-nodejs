@@ -234,6 +234,61 @@ console.log("\n--- base port below 64536 (base + 1000 is legal) ---");
   }
 }
 
+// ── AUX-PORT BIND FAILURE DEGRADES (never crashes the main server) ───────────
+// The auxiliary AI/test port is a debug convenience, never load-bearing: a bind
+// failure there must degrade to no-aux-port, logged LOUD, and the MAIN server
+// the operator asked for must still serve. Driven by a REAL EADDRINUSE: hold
+// base+1000 with our own listener so the framework's aux bind really fails.
+// (The non-EADDRINUSE codes take the same `aiServer = null` + log path; they
+// are not deterministically triggerable here without a mock because the aux
+// port shares `host` with the main port — this locks the degrade contract with
+// the one aux-bind failure a test CAN produce for real.)
+console.log("\n--- aux port (base + 1000) already in use: degrade, main survives ---");
+{
+  const base = await lowBase();
+  if (base === null) {
+    console.log("  \x1b[33mSKIP\x1b[0m no free base port pair in 21000-21500 (+1000) on 127.0.0.1");
+    fail++;
+  } else {
+    // Really occupy the derived aux port BEFORE boot.
+    const squatter = net.createServer();
+    await new Promise<void>((resolve, reject) => {
+      squatter.once("error", reject);
+      squatter.listen(base + 1000, "127.0.0.1", () => resolve());
+    });
+
+    const dir = project("auxbusy");
+    const from = logSize();
+    const srv = await startWithin(15_000, {
+      port: base,
+      host: "127.0.0.1",
+      routesDir: join(dir, "src/routes"),
+      modelsDir: join(dir, "src/models"),
+      staticDir: join(dir, "public"),
+    });
+
+    assert("startServer RESOLVES when the aux-port bind fails", srv !== null,
+      `base=${base}, aux=${base + 1000} held: startServer never settled within 15s`);
+
+    let status = 0;
+    try { status = await get(base, "/health"); } catch { status = -1; }
+    assert("the main port still serves after the aux-port bind failed", status > 0,
+      `GET http://127.0.0.1:${base}/health -> ${status}`);
+
+    // Give the async 'error' event a tick to be logged.
+    await new Promise((r) => setTimeout(r, 200));
+    const written = logSince(from);
+    assert("the aux-port bind failure is logged, not swallowed silently",
+      written.includes(String(base + 1000)) && /in use|bind failed/i.test(written),
+      `log delta: ${written.slice(0, 400)}`);
+
+    if (srv) srv.close();
+    await new Promise<void>((r) => squatter.close(() => r()));
+    await new Promise((r) => setTimeout(r, 150));
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 console.log(`\n${"=".repeat(50)}`);
 console.log(`  Results: \x1b[32m${pass} passed\x1b[0m, \x1b[31m${fail} failed\x1b[0m`);
 console.log(`${"=".repeat(50)}\n`);
