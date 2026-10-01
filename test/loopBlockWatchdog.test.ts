@@ -34,7 +34,6 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, openSync, closeSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { createConnection } from "node:net";
 
 const HERE = import.meta.dirname;
 const REPO = resolve(HERE, "..");
@@ -59,23 +58,51 @@ afterEach(() => {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-function portAccepts(port: number): Promise<boolean> {
-  return new Promise((res) => {
-    const sock = createConnection({ port, host: "127.0.0.1" });
-    const done = (ok: boolean): void => {
-      sock.destroy();
-      res(ok);
-    };
-    sock.once("connect", () => done(true));
-    sock.once("error", () => done(false));
-    setTimeout(() => done(false), 1000);
-  });
+/**
+ * Readiness is a COMPLETED HTTP round-trip, never a bare TCP connect. A plain
+ * connect() can succeed against a listener that is about to vanish - the server
+ * uses killPort() to take over an occupied port, so a connect can land on the
+ * dying occupant during the kill->rebind gap, and the very next fetch then
+ * refuses. (That is exactly the `ECONNREFUSED 127.0.0.1:7842` this test hit on
+ * CI: portAccepts said yes, the awaited fetch said no.) A finished GET against a
+ * known route can only come from the real, bound, serving process, and once a
+ * held unique port answers it keeps answering - so readiness confirmed this way
+ * is stable.
+ */
+async function serverAnswers(port: number): Promise<boolean> {
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/fast`);
+    await r.text();
+    return r.status === 200;
+  } catch {
+    return false; // connection refused / reset while the child is still coming up
+  }
+}
+
+/**
+ * fetch() the path, retrying briefly on a transient connection failure. The
+ * server is confirmed serving before any test runs, so a one-off `fetch failed`
+ * here is a momentary socket artifact (a backgrounded accept yet to catch up),
+ * not the behaviour under test - retrying within a short bound removes the flake
+ * without masking a real failure (a dead server never starts answering, so the
+ * window still expires and the error still surfaces).
+ */
+async function resilientGet(port: number, path: string): Promise<string> {
+  const deadline = Date.now() + 3000;
+  for (;;) {
+    try {
+      return await fetch(`http://127.0.0.1:${port}${path}`).then((r) => r.text());
+    } catch (error) {
+      if (Date.now() >= deadline) throw error;
+      await sleep(50);
+    }
+  }
 }
 
 /** Milliseconds a GET took, end to end, over a real socket. */
 async function timeGet(port: number, path: string): Promise<number> {
   const started = Date.now();
-  await fetch(`http://127.0.0.1:${port}${path}`).then((r) => r.text());
+  await resilientGet(port, path);
   return Date.now() - started;
 }
 
@@ -147,7 +174,7 @@ async function startProbe(port: number, env: Record<string, string> = {}): Promi
 
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
-    if (await portAccepts(port)) {
+    if (await serverAnswers(port)) {
       return { port, logPath, log: () => readFileSync(logPath, "utf8") };
     }
     if (child.exitCode !== null) {
@@ -165,7 +192,7 @@ describe("event loop block watchdog", () => {
   it("warns, and names the duration, when a handler occupies the loop", async () => {
     const probe = await startProbe(7841, { TINA4_LOOP_LAG_WARN_MS: "250" });
 
-    await fetch(`http://127.0.0.1:${probe.port}/busy`).then((r) => r.text());
+    await resilientGet(probe.port, "/busy");
     await sleep(400); // let the watchdog tick land in the log
 
     const lines = blockedLines(probe.log());
@@ -180,7 +207,7 @@ describe("event loop block watchdog", () => {
   it("stays silent for a handler that awaits for just as long", async () => {
     const probe = await startProbe(7842, { TINA4_LOOP_LAG_WARN_MS: "250" });
 
-    await fetch(`http://127.0.0.1:${probe.port}/awaited`).then((r) => r.text());
+    await resilientGet(probe.port, "/awaited");
     await sleep(400);
 
     expect(blockedLines(probe.log())).toEqual([]);
@@ -191,12 +218,12 @@ describe("event loop block watchdog", () => {
 
     await timeGet(probe.port, "/fast"); // warm the route cache
 
-    const awaitedInFlight = fetch(`http://127.0.0.1:${probe.port}/awaited`).then((r) => r.text());
+    const awaitedInFlight = resilientGet(probe.port, "/awaited");
     await sleep(150);
     const duringAwaited = await timeGet(probe.port, "/fast");
     await awaitedInFlight;
 
-    const busyInFlight = fetch(`http://127.0.0.1:${probe.port}/busy`).then((r) => r.text());
+    const busyInFlight = resilientGet(probe.port, "/busy");
     await sleep(150);
     const duringBusy = await timeGet(probe.port, "/fast");
     await busyInFlight;
@@ -210,7 +237,7 @@ describe("event loop block watchdog", () => {
   it("is silenced by TINA4_LOOP_LAG_WARN_MS=0", async () => {
     const probe = await startProbe(7844, { TINA4_LOOP_LAG_WARN_MS: "0" });
 
-    await fetch(`http://127.0.0.1:${probe.port}/busy`).then((r) => r.text());
+    await resilientGet(probe.port, "/busy");
     await sleep(400);
 
     expect(blockedLines(probe.log())).toEqual([]);
