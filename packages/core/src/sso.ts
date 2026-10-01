@@ -26,7 +26,7 @@ type SessionLike = {
   get(key: string): unknown;
   set(key: string, value: unknown): void;
   delete(key: string): void;
-  regenerate(): string;
+  regenerate(): string | null;
   destroy(): void;
 };
 
