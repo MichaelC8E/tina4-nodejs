@@ -827,7 +827,7 @@ export class Session {
    *
    * Returns true on a successful persist, false if the backend was unreachable
    * (logged). The dirty flag is cleared only on success so a later save()
-   * retries once the backend recovers. A nothing-to-persist call returns true.
+   * retries once the backend recovers. A call with no session returns true.
    *
    * Other requests on the same session run while this one does, so the save
    * writes only THIS request's changes, onto the record as it is stored now.
@@ -837,10 +837,20 @@ export class Session {
    * loaded it is never re-created: the session has ended, for this request
    * too. A request that has not loaded a stored record (a new session, the new
    * id regenerate() mints) writes its data whole, as before.
+   *
+   * A session the store already holds is re-written even when this request
+   * changed nothing: that write re-stamps the backend deadline to
+   * now + TINA4_SESSION_TTL, so a session expires after that span of INACTIVITY
+   * rather than that long after its last CHANGE (ADR-0087 — a session's expiry
+   * slides on activity). The re-write is the re-read, merged record, so sliding
+   * the deadline is concurrent-safe: it never clobbers another request's change,
+   * never re-creates an ended record, and TINA4_SESSION_TTL=0 still re-stamps a
+   * never-expires deadline (ADR-0027). A request with no stored session and no
+   * change writes nothing — there is no deadline to move.
    */
   save(): boolean {
     if (!this.sessionId || !this.data) return true;
-    if (!this.dirty) return true;
+    if (!this.dirty && !this.stored) return true;
     let record: SessionData = this.data;
     if (this.stored) {
       const current = this.safeRead(this.sessionId);

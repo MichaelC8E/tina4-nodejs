@@ -31,7 +31,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 import net from "node:net";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { FileSessionHandler, RedisSessionHandler, Session } from "../packages/core/src/session.ts";
@@ -82,6 +82,15 @@ function stored(id: string): Record<string, unknown> | null {
   delete record._accessed;
   return record;
 }
+
+/**
+ * The absolute expiry deadline (unix seconds) the FileSessionHandler stored for
+ * an id, read from the wrapper on disk — the field the handler stamps from
+ * now + ttl on every write (0 means never-expires). Lets a test read the
+ * deadline straight off disk, never through the session under test.
+ */
+const storedExpiry = (id: string): number =>
+  JSON.parse(readFileSync(sessionFile(id), "utf-8"))._expires;
 
 /** Remove every session record, so a check over all of them sees only its own. */
 const freshStore = (): void => {
@@ -347,12 +356,28 @@ console.log("\n-- concurrent requests keep each other's changes --");
 console.log("\n-- a save still writes what the request changed --");
 
 {
+  // ADR-0087: a session's expiry slides on activity. A read-only request
+  // re-writes the stored record even though it changed nothing, so the backend
+  // deadline moves forward — the session expires after TINA4_SESSION_TTL of
+  // INACTIVITY, not that long after its last change. Mirrors tina4-php's
+  // testAnUnchangedSessionIsStillWrittenSoExpiryCountsFromTheLastRequest.
   const sid = loggedIn();
-  const session = request(sid);
-  const before = statSync(sessionFile(sid)).mtimeMs;
-  session.get("user");
+  const session = new Session("file", { path: TEST_PATH, ttl: 3600 });
+  session.start(sid);
+  session.get("user");   // a request that touched nothing
+
+  // Put the stored deadline about to expire, the way the php test does, then
+  // let the read-only save re-stamp it to now + ttl.
+  const file = sessionFile(sid);
+  const wrapper = JSON.parse(readFileSync(file, "utf-8"));
+  const aboutToExpire = Math.floor(Date.now() / 1000) + 5;
+  wrapper._expires = aboutToExpire;
+  writeFileSync(file, JSON.stringify(wrapper));
+
   assert("a read-only request saves without error", session.save() === true);
-  assert("a read-only request writes nothing at save", statSync(sessionFile(sid)).mtimeMs === before);
+  assert("a read-only request moves the expiry forward",
+    storedExpiry(sid) > Math.floor(Date.now() / 1000) + 3000);
+  assert("a read-only save leaves the stored data unchanged", same(stored(sid), { user: "alice" }));
 }
 
 {
