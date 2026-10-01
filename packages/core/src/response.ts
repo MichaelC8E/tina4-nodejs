@@ -11,6 +11,7 @@ import fs from "node:fs";
 import nodePath from "node:path";
 import { once } from "node:events";
 import type { Tina4Response, CookieOptions } from "./types.js";
+import { currentCspNonce } from "./csp.js";
 
 /**
  * Best-effort close of a streaming source on client disconnect or a mid-stream
@@ -93,7 +94,8 @@ export async function getFrond(): Promise<InstanceType<any>> {
   const dir = _defaultTemplatesDir ?? nodePath.resolve(process.cwd(), "src/templates");
   let engine = _frondCache.get(dir);
   if (!engine) {
-    const { Frond } = await import("../../frond/src/engine.js");
+    const { Frond, setCspNonceProvider } = await import("../../frond/src/engine.js");
+    setCspNonceProvider(currentCspNonce);
     engine = new Frond(dir);
     _frondCache.set(dir, engine);
   }
@@ -109,7 +111,8 @@ export async function getFrameworkFrond(): Promise<InstanceType<any> | null> {
   const frameworkDir = nodePath.resolve(nodePath.dirname(import.meta.url.replace("file://", "")), "..", "templates");
   if (!_frameworkFrond && fs.existsSync(frameworkDir)) {
     try {
-      const { Frond } = await import("../../frond/src/engine.js");
+      const { Frond, setCspNonceProvider } = await import("../../frond/src/engine.js");
+      setCspNonceProvider(currentCspNonce);
       _frameworkFrond = new Frond(frameworkDir);
     } catch { return null; }
   }
@@ -261,6 +264,13 @@ export function createResponse(res: ServerResponse): Tina4Response {
 
   // ── Attach the underlying ServerResponse ──
   response.raw = res;
+
+  // ── Per-response CSP nonce (ADR-0088) ──
+  // Read the request-scoped nonce (csp.ts), minting one on first access. Inside
+  // a request this is the SAME value runDispatch() established and the security
+  // middleware names in the Content-Security-Policy header, so a route emitting
+  // an inline block as `<script nonce="${res.cspNonce}">` stays CSP-clean.
+  response.cspNonce = currentCspNonce();
 
   // ── Explicit methods ──
 
@@ -450,7 +460,8 @@ export function createResponse(res: ServerResponse): Tina4Response {
     templateDir?: string,
   ): Promise<Tina4Response> {
     try {
-      const { Frond } = await import("../../frond/src/engine.js");
+      const { Frond, setCspNonceProvider } = await import("../../frond/src/engine.js");
+      setCspNonceProvider(currentCspNonce);
       const dir = templateDir ?? _defaultTemplatesDir ?? nodePath.resolve(process.cwd(), "src/templates");
       let engine = _frondCache.get(dir);
       if (!engine) {

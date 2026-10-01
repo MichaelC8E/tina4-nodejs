@@ -18,13 +18,16 @@ function swaggerUiCdn(): string {
   return (process.env.TINA4_SWAGGER_UI_CDN ?? "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5").replace(/\/+$/, "");
 }
 
-const SWAGGER_UI_HTML = (specUrl: string) => `<!DOCTYPE html>
+// The inline <style> and the inline SwaggerUIBundle(...) <script> carry this
+// response's CSP nonce (ADR-0088) so they run under the strict default
+// Content-Security-Policy; the external <script src>/<link> need none.
+const SWAGGER_UI_HTML = (specUrl: string, nonce: string) => `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>Tina4 API Documentation</title>
   <link rel="stylesheet" href="${swaggerUiCdn()}/swagger-ui.css">
-  <style>
+  <style nonce="${nonce}">
     body { margin: 0; background: #fafafa; }
     .topbar { display: none !important; }
   </style>
@@ -32,7 +35,7 @@ const SWAGGER_UI_HTML = (specUrl: string) => `<!DOCTYPE html>
 <body>
   <div id="swagger-ui"></div>
   <script src="${swaggerUiCdn()}/swagger-ui-bundle.js"></script>
-  <script>
+  <script nonce="${nonce}">
     SwaggerUIBundle({
       url: "${specUrl}",
       dom_id: '#swagger-ui',
@@ -65,7 +68,7 @@ export function createSwaggerRoutes(
   getSpec: () => unknown
 ): RouteDefinition[] {
   const serveUi = async (_req: Tina4Request, res: Tina4Response): Promise<void> => {
-    res.html(SWAGGER_UI_HTML("/swagger/openapi.json"));
+    res.html(SWAGGER_UI_HTML("/swagger/openapi.json", res.cspNonce));
   };
 
   return [

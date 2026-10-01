@@ -21,8 +21,11 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
  * Three rules:
  *  1. TINA4_CSP unset -> the warning is emitted exactly ONCE across many requests.
  *  2. TINA4_CSP set   -> NO new warning (the app opted in).
- *  3. Behaviour is UNCHANGED: the CSP header is still `default-src 'self'` when
- *     unset, and reflects the value once set.
+ *  3. The CSP header keeps `default-src 'self'` when unset (and reflects the
+ *     user policy once set) PLUS a per-response nonce in style-src and script-src
+ *     (ADR-0088), so the framework's own inline <style>/<script> run under the
+ *     strict policy without 'unsafe-inline'. The nonce is random per response,
+ *     so assert the STRUCTURE, never a byte-equal string.
  *
  * Mutation-proved: drop the warnCspDefaultOnce() call and rule 1 goes RED; warn on
  * every request (remove the ledger guard) and "exactly once" goes RED.
@@ -47,6 +50,18 @@ const MARK = "TINA4_CSP is not set";
 const PORT = await freePort();
 let pass = 0;
 let fail = 0;
+
+/** The default CSP: default-src 'self' plus a nonce in style-src + script-src (ADR-0088). */
+function assertDefaultCspNonce(value: string | undefined): void {
+  assert("default csp starts with default-src 'self'",
+    typeof value === "string" && value.startsWith("default-src 'self'"), `got "${String(value)}"`);
+  const directives = Object.fromEntries(
+    String(value).split(";").map((d) => d.trim()).filter(Boolean).map((d) => [d.split(/\s+/)[0], d]),
+  );
+  assert("style-src carries a nonce", (directives["style-src"] ?? "").includes("'nonce-"), `got "${String(value)}"`);
+  assert("script-src carries a nonce", (directives["script-src"] ?? "").includes("'nonce-"), `got "${String(value)}"`);
+  assert("default csp never uses unsafe-inline", !String(value).includes("'unsafe-inline'"), `got "${String(value)}"`);
+}
 
 function assert(name: string, condition: boolean, detail = ""): void {
   if (condition) {
@@ -112,9 +127,7 @@ const server = await startServer({
   await getHeaders();
   const n = await markCount();
   assert("default csp warns exactly once", n === 1, `saw ${n}`);
-  assert("csp header is still default-src 'self'",
-    h1["content-security-policy"] === "default-src 'self'",
-    `got "${String(h1["content-security-policy"])}"`);
+  assertDefaultCspNonce(h1["content-security-policy"] as string | undefined);
 }
 
 // --- Rule 2: set -> no NEW warning, header reflects the set value ---
@@ -125,9 +138,15 @@ const server = await startServer({
   const after = await markCount();
   assert("set csp does not add a warning", after === before && before === 1,
     `before=${before} after=${after}`);
-  assert("set csp is reflected in the header",
-    h["content-security-policy"] === "default-src 'self' https://api.example",
-    `got "${String(h["content-security-policy"])}"`);
+  // The user policy is honoured AND the framework's nonce is added to
+  // style-src/script-src so its own inline content still runs (ADR-0088).
+  const csp = String(h["content-security-policy"]);
+  assert("set csp keeps the user policy",
+    csp.startsWith("default-src 'self' https://api.example"), `got "${csp}"`);
+  assert("set csp: style-src carries a nonce",
+    /style-src[^;]*'nonce-/.test(csp), `got "${csp}"`);
+  assert("set csp: script-src carries a nonce",
+    /script-src[^;]*'nonce-/.test(csp), `got "${csp}"`);
 }
 
 delete process.env.TINA4_CSP;

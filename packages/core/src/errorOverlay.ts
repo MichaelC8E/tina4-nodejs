@@ -34,6 +34,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 import { readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { isTruthy } from "./dotenv.js";
+import { currentCspNonce } from "./csp.js";
 
 // OVERLAY-DEC-03: cap the rendered frames so a deep/recursive stack yields a bounded
 // page, not one source-file read per frame.
@@ -124,18 +125,16 @@ function formatSourceBlock(filename: string, lineno: number): string {
   if (lines.length === 0) return "";
 
   const rows = lines.map(([num, text, isError]) => {
-    const bg = isError ? `background:${ERROR_LINE_BG};` : "";
+    const rowClass = isError ? "eo-line eo-line-err" : "eo-line";
     const marker = isError ? "&#x25b6;" : " ";
-    return `<div style="${bg}display:flex;padding:1px 0;">`
-      + `<span style="color:${YELLOW};min-width:3.5em;text-align:right;padding-right:1em;user-select:none;">${num}</span>`
-      + `<span style="color:${RED};width:1.2em;user-select:none;">${marker}</span>`
-      + `<span style="color:${TEXT};white-space:pre-wrap;tab-size:4;">${esc(text)}</span>`
+    return `<div class="${rowClass}">`
+      + `<span class="eo-ln">${num}</span>`
+      + `<span class="eo-marker">${marker}</span>`
+      + `<span class="eo-code">${esc(text)}</span>`
       + `</div>`;
   }).join("\n");
 
-  return `<div style="background:${SURFACE};border-radius:6px;padding:12px;overflow-x:auto;`
-    + `font-family:'SF Mono','Fira Code','Consolas',monospace;font-size:13px;line-height:1.6;">`
-    + rows + `</div>`;
+  return `<div class="eo-source">` + rows + `</div>`;
 }
 
 /**
@@ -162,21 +161,20 @@ function formatFrame(frame: StackFrame, capturedAt = 0): string {
         const mtimeIso = `${String(d.getUTCHours()).padStart(2, "0")}:`
           + `${String(d.getUTCMinutes()).padStart(2, "0")}:`
           + `${String(d.getUTCSeconds()).padStart(2, "0")}`;
-        staleBadge = ` <span style="background:${PEACH};color:${BG};padding:1px 8px;`
-          + `border-radius:3px;font-size:11px;font-weight:700;margin-left:6px;">`
+        staleBadge = ` <span class="eo-stale">`
           + `FILE MODIFIED @ ${mtimeIso} UTC &mdash; source may not match what failed</span>`;
       }
     } catch {
       // best-effort — ignore missing files / permission errors
     }
   }
-  return `<div style="margin-bottom:16px;">`
-    + `<div style="margin-bottom:4px;">`
-    + `<span style="color:${BLUE};">${esc(frame.file)}</span>`
-    + `<span style="color:${SUBTEXT};"> : </span>`
-    + `<span style="color:${YELLOW};">${frame.line}</span>`
-    + `<span style="color:${SUBTEXT};"> in </span>`
-    + `<span style="color:${GREEN};">${esc(frame.func)}</span>`
+  return `<div class="eo-frame">`
+    + `<div class="eo-frame-head">`
+    + `<span class="eo-file">${esc(frame.file)}</span>`
+    + `<span class="eo-sep"> : </span>`
+    + `<span class="eo-lineno">${frame.line}</span>`
+    + `<span class="eo-sep"> in </span>`
+    + `<span class="eo-fn">${esc(frame.func)}</span>`
     + staleBadge
     + `</div>`
     + source
@@ -185,22 +183,21 @@ function formatFrame(frame: StackFrame, capturedAt = 0): string {
 
 function collapsible(title: string, content: string, openByDefault = false): string {
   const open = openByDefault ? " open" : "";
-  return `<details style="margin-top:16px;"${open}>`
-    + `<summary style="cursor:pointer;color:${LAVENDER};font-weight:600;font-size:15px;`
-    + `padding:8px 0;user-select:none;">${esc(title)}</summary>`
-    + `<div style="padding:8px 0;">${content}</div>`
+  return `<details class="eo-details"${open}>`
+    + `<summary class="eo-summary">${esc(title)}</summary>`
+    + `<div class="eo-details-body">${content}</div>`
     + `</details>`;
 }
 
 function table(pairs: Array<[string, string]>): string {
-  if (pairs.length === 0) return `<span style="color:${SUBTEXT};">None</span>`;
+  if (pairs.length === 0) return `<span class="eo-none">None</span>`;
   const rows = pairs.map(([key, val]) =>
     `<tr>`
-    + `<td style="color:${PEACH};padding:4px 16px 4px 0;vertical-align:top;white-space:nowrap;">${esc(key)}</td>`
-    + `<td style="color:${TEXT};padding:4px 0;word-break:break-all;">${esc(val)}</td>`
+    + `<td class="eo-key">${esc(key)}</td>`
+    + `<td class="eo-val">${esc(val)}</td>`
     + `</tr>`
   ).join("");
-  return `<table style="border-collapse:collapse;width:100%;">${rows}</table>`;
+  return `<table class="eo-table">${rows}</table>`;
 }
 
 /**
@@ -232,7 +229,7 @@ export function renderErrorOverlay(error: Error, request?: any): string {
   }
   const hidden = frames.length - Math.min(frames.length, MAX_FRAMES);
   if (hidden > 0) {
-    framesHtml += `<div style="color:${SUBTEXT};padding:8px 0;font-size:13px;">`
+    framesHtml += `<div class="eo-hidden-frames">`
       + `&#8230; ${hidden} more stack frames hidden (truncated at ${MAX_FRAMES})</div>`;
   }
 
@@ -277,36 +274,82 @@ export function renderErrorOverlay(error: Error, request?: any): string {
   const envSection = collapsible("Environment", table(envPairs));
   const stackSection = collapsible("Stack Trace", framesHtml, true);
 
+  // The overlay runs under the strict default CSP: one nonce'd <style> carries
+  // every rule, and the body uses classes only — no style= attribute, because a
+  // nonce covers a <style> ELEMENT but never a style attribute (ADR-0088).
+  const nonce = currentCspNonce();
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Tina4 Error — ${esc(excType)}</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box;}
-body{background:${BG};color:${TEXT};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:24px;line-height:1.5;}
+<style nonce="${nonce}">
+${overlayStylesheet()}
 </style>
 </head>
 <body>
-<div style="max-width:960px;margin:0 auto;">
-  <div style="margin-bottom:24px;">
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
-      <span style="background:${RED};color:${BG};padding:4px 12px;border-radius:4px;font-weight:700;font-size:13px;text-transform:uppercase;">Error</span>
-      <span style="color:${SUBTEXT};font-size:14px;">Tina4 Debug Overlay</span>
+<div class="eo-wrap">
+  <div class="eo-header">
+    <div class="eo-badge-row">
+      <span class="eo-badge">Error</span>
+      <span class="eo-sub">Tina4 Debug Overlay</span>
     </div>
-    <h1 style="color:${RED};font-size:28px;font-weight:700;margin-bottom:8px;">${esc(excType)}</h1>
-    <p style="color:${TEXT};font-size:18px;font-family:'SF Mono','Fira Code','Consolas',monospace;background:${SURFACE};padding:12px 16px;border-radius:6px;border-left:4px solid ${RED};">${esc(excMsg)}</p>
+    <h1 class="eo-type">${esc(excType)}</h1>
+    <p class="eo-msg">${esc(excMsg)}</p>
   </div>
   ${stackSection}
   ${requestSection}
   ${envSection}
-  <div style="margin-top:32px;padding-top:16px;border-top:1px solid ${OVERLAY};color:${SUBTEXT};font-size:12px;">
+  <div class="eo-footer">
     Tina4 Debug Overlay &mdash; This page is only shown in debug mode. Set TINA4_DEBUG=false in production.
   </div>
 </div>
 </body>
 </html>`;
+}
+
+/**
+ * The overlay's full stylesheet, served inside one nonce'd <style> block.
+ *
+ * Keeping the rules here (not on the elements) is what makes the overlay
+ * CSP-clean: no framework page emits a style="..." attribute, because a nonce
+ * covers a <style> ELEMENT but never a style attribute (ADR-0088).
+ */
+function overlayStylesheet(): string {
+  return `
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:${BG};color:${TEXT};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:24px;line-height:1.5;}
+.eo-wrap{max-width:960px;margin:0 auto;}
+.eo-header{margin-bottom:24px;}
+.eo-badge-row{display:flex;align-items:center;gap:12px;margin-bottom:12px;}
+.eo-badge{background:${RED};color:${BG};padding:4px 12px;border-radius:4px;font-weight:700;font-size:13px;text-transform:uppercase;}
+.eo-sub{color:${SUBTEXT};font-size:14px;}
+.eo-type{color:${RED};font-size:28px;font-weight:700;margin-bottom:8px;}
+.eo-msg{color:${TEXT};font-size:18px;font-family:'SF Mono','Fira Code','Consolas',monospace;background:${SURFACE};padding:12px 16px;border-radius:6px;border-left:4px solid ${RED};}
+.eo-footer{margin-top:32px;padding-top:16px;border-top:1px solid ${OVERLAY};color:${SUBTEXT};font-size:12px;}
+.eo-source{background:${SURFACE};border-radius:6px;padding:12px;overflow-x:auto;font-family:'SF Mono','Fira Code','Consolas',monospace;font-size:13px;line-height:1.6;}
+.eo-line{display:flex;padding:1px 0;}
+.eo-line-err{background:${ERROR_LINE_BG};}
+.eo-ln{color:${YELLOW};min-width:3.5em;text-align:right;padding-right:1em;user-select:none;}
+.eo-marker{color:${RED};width:1.2em;user-select:none;}
+.eo-code{color:${TEXT};white-space:pre-wrap;tab-size:4;}
+.eo-frame{margin-bottom:16px;}
+.eo-frame-head{margin-bottom:4px;}
+.eo-file{color:${BLUE};}
+.eo-sep{color:${SUBTEXT};}
+.eo-lineno{color:${YELLOW};}
+.eo-fn{color:${GREEN};}
+.eo-stale{background:${PEACH};color:${BG};padding:1px 8px;border-radius:3px;font-size:11px;font-weight:700;margin-left:6px;}
+.eo-details{margin-top:16px;}
+.eo-summary{cursor:pointer;color:${LAVENDER};font-weight:600;font-size:15px;padding:8px 0;user-select:none;}
+.eo-details-body{padding:8px 0;}
+.eo-table{border-collapse:collapse;width:100%;}
+.eo-key{color:${PEACH};padding:4px 16px 4px 0;vertical-align:top;white-space:nowrap;}
+.eo-val{color:${TEXT};padding:4px 0;word-break:break-all;}
+.eo-none{color:${SUBTEXT};}
+.eo-hidden-frames{color:${SUBTEXT};padding:8px 0;font-size:13px;}
+`;
 }
 
 /**

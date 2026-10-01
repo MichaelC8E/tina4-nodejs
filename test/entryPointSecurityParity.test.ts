@@ -99,17 +99,23 @@ function request(port: number, method: string, path: string, headers: Record<str
   });
 }
 
+// content-security-policy is checked separately for its nonce structure
+// (ADR-0088): its value carries a per-response random nonce, never byte-equal.
 const WANTED: Record<string, string> = {
-  "content-security-policy": "default-src 'self'",
   "x-content-type-options": "nosniff",
   "x-frame-options": "SAMEORIGIN",
 };
 
 function missing(headers: http.IncomingHttpHeaders): string {
-  return Object.entries(WANTED)
+  const bad = Object.entries(WANTED)
     .filter(([name, value]) => headers[name] !== value)
-    .map(([name, value]) => `[${name}=${String(headers[name])} want ${value}]`)
-    .join(" ");
+    .map(([name, value]) => `[${name}=${String(headers[name])} want ${value}]`);
+  const csp = String(headers["content-security-policy"]);
+  if (!csp.startsWith("default-src 'self'") || !/style-src[^;]*'nonce-/.test(csp)
+      || !/script-src[^;]*'nonce-/.test(csp) || csp.includes("'unsafe-inline'")) {
+    bad.push(`[content-security-policy=${csp}]`);
+  }
+  return bad.join(" ");
 }
 
 // ── The OpenID provider: a real HTTP server on a real socket ─────────────────

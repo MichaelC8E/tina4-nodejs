@@ -57,14 +57,24 @@ const LIMIT = 1_048_576; // TINA4_MAX_UPLOAD_SIZE for every server here
 const HEADER_LIMIT = 8192; // TINA4_MAX_REQUEST_HEADER
 const IDLE_SECONDS = 3; // TINA4_REQUEST_TIMEOUT
 
+// content-security-policy is asserted via assertCspNonce: ADR-0088 adds a
+// per-response random nonce to style-src/script-src, so it is never byte-equal.
 const SECURITY_HEADERS: Record<string, string> = {
   "x-frame-options": "SAMEORIGIN",
   "x-content-type-options": "nosniff",
-  "content-security-policy": "default-src 'self'",
   "referrer-policy": "strict-origin-when-cross-origin",
   "x-xss-protection": "0",
   "permissions-policy": "camera=(), microphone=(), geolocation=()",
 };
+
+/** Default CSP = default-src 'self' + a nonce in style-src and script-src (ADR-0088). */
+function assertCspNonce(value: string[] | string | undefined): void {
+  const v = Array.isArray(value) ? value[0] : value;
+  expect(typeof v === "string" && v!.includes("default-src 'self'"), `csp: ${String(v)}`).toBe(true);
+  expect(String(v).includes("style-src") && String(v).includes("script-src"), `csp: ${String(v)}`).toBe(true);
+  expect((String(v).match(/'nonce-/g) ?? []).length >= 2, `csp carries no nonce: ${String(v)}`).toBe(true);
+  expect(String(v).includes("'unsafe-inline'"), `csp uses unsafe-inline: ${String(v)}`).toBe(false);
+}
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -644,6 +654,7 @@ function expectShape(answer: Answer, status: number, body: string): void {
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
     expect(answer.headers[name], `${name}${describeAnswer(answer)}`).toEqual([value]);
   }
+  assertCspNonce(answer.headers["content-security-policy"]);
   expect(answer.headers["strict-transport-security"], describeAnswer(answer)).toBeUndefined();
 }
 

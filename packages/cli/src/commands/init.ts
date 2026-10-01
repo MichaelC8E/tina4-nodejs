@@ -211,20 +211,30 @@ export default async function (req: Tina4Request, res: Tina4Response): Promise<v
 `
   );
 
-  // Static index page
+  // Static index stylesheet. A static file cannot carry a per-response CSP
+  // nonce (ADR-0088), so its styles live in an external same-origin stylesheet
+  // the strict default policy ('self') already allows — not an inline <style>,
+  // which the browser would refuse, leaving a fresh project unstyled.
+  writeFileSync(
+    join(targetDir, "public/style.css"),
+    `body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 80px auto; padding: 0 20px; color: #333; }
+h1 { font-size: 2.5em; margin-bottom: 0.2em; }
+p { color: #666; font-size: 1.1em; }
+code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
+a { color: #2563eb; }
+`
+  );
+
+  // Static index page. CSP-clean: an external stylesheet, no inline <style>.
+  // For a page that needs an inline block, render it through a Frond template
+  // and stamp the nonce: <style nonce="{{ csp_nonce() }}">...</style>.
   writeFileSync(
     join(targetDir, "public/index.html"),
     `<!DOCTYPE html>
 <html>
 <head>
   <title>Tina4</title>
-  <style>
-    body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 80px auto; padding: 0 20px; color: #333; }
-    h1 { font-size: 2.5em; margin-bottom: 0.2em; }
-    p { color: #666; font-size: 1.1em; }
-    code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
-    a { color: #2563eb; }
-  </style>
+  <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <h1>tina4</h1>

@@ -948,6 +948,32 @@ frond.unsandbox();
 - **Raw blocks** — `{% raw %}...{% endraw %}` outputs literal template syntax.
 - **Pre-compiled regexes** + token caching (cleared on file mtime change in dev mode) for ~2.8x render improvement over the naive path.
 
+### Inline `<style>` / `<script>` under the default CSP — use `csp_nonce()` (ADR-0088)
+
+Tina4 serves a strict default Content-Security-Policy (`default-src 'self'`). A
+browser refuses any inline `<style>` or `<script>` under that policy unless the
+element carries a nonce the CSP header also names. The framework mints one nonce
+per response, injects `'nonce-<X>'` into `style-src` and `script-src`, and exposes
+the value as the Frond global `csp_nonce()` (and as `res.cspNonce` in a route). So
+a template that needs an inline block stamps the nonce on it:
+
+```twig
+<style nonce="{{ csp_nonce() }}">.badge{color:var(--primary)}</style>
+<script nonce="{{ csp_nonce() }}">console.log("ready");</script>
+```
+
+Two rules the nonce does NOT cover, so prefer classes and `addEventListener`:
+- **No `style="..."` attributes** — a nonce covers a `<style>` ELEMENT, never a
+  style attribute. Move inline styles into a nonce'd `<style>` block or an external
+  stylesheet (same-origin `'self'` is already allowed).
+- **No inline `onclick=` / `on*=` handlers** — bind them in a nonce'd `<script>`
+  with `addEventListener` instead.
+
+An external `<script src="...">` or `<link rel="stylesheet">` needs no nonce
+(same-origin `'self'` already allows it). A **static** HTML file cannot carry a
+per-response nonce, so keep static pages free of inline blocks (use an external
+stylesheet); render a page that needs an inline block through a Frond template.
+
 ## Module: Api (`packages/core/src/api.ts`)
 
 Zero-dep HTTP client over `node:http` / `node:https`. Used by integrations, queue producers, health checks, and tests.

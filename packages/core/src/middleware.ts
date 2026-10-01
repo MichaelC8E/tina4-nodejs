@@ -13,6 +13,7 @@ import { Log } from "./logger.js";
 import { isTruthy } from "./dotenv.js";
 import { defaultRouter, type Router } from "./router.js";
 import { resolveClientIp } from "./trustedProxy.js";
+import { currentCspNonce, resolveCspHeader } from "./csp.js";
 import { getFrond, getFrameworkFrond, wantsJson, negotiatedErrorBody } from "./response.js";
 
 /**
@@ -951,12 +952,18 @@ export class SecurityHeadersMiddleware {
    * overrides, WITHOUT Strict-Transport-Security, which depends on the
    * request's scheme. Also what a transport rejection carries (ADR-0068
    * section 4), written before the scheme is known.
+   *
+   * Content-Security-Policy always carries a per-response nonce in style-src
+   * AND script-src (ADR-0088), read from the request async-context (minted on
+   * first access), so the framework's own inline content runs under the strict
+   * default without 'unsafe-inline'. The nonce is random per response, so a
+   * caller comparing this header must assert its STRUCTURE, never a byte string.
    */
   static canonicalHeaders(): Record<string, string> {
     return {
       "X-Frame-Options": process.env.TINA4_FRAME_OPTIONS ?? "SAMEORIGIN",
       "X-Content-Type-Options": "nosniff",
-      "Content-Security-Policy": process.env.TINA4_CSP ?? "default-src 'self'",
+      "Content-Security-Policy": resolveCspHeader(currentCspNonce()),
       "Referrer-Policy": process.env.TINA4_REFERRER_POLICY ?? "strict-origin-when-cross-origin",
       "X-XSS-Protection": "0",
       "Permissions-Policy": process.env.TINA4_PERMISSIONS_POLICY ?? "camera=(), microphone=(), geolocation=()",
@@ -985,6 +992,10 @@ export class SecurityHeadersMiddleware {
     if (process.env.TINA4_CSP === undefined) {
       SecurityHeadersMiddleware.warnCspDefaultOnce();
     }
+    // Content-Security-Policy carries a per-response nonce in style-src AND
+    // script-src (ADR-0088), already resolved in canonical, so the framework's
+    // own inline <style>/<script> (and user templates using the Frond
+    // csp_nonce() global) run under the strict policy without 'unsafe-inline'.
     for (const name of ["Content-Security-Policy", "Referrer-Policy", "X-XSS-Protection", "Permissions-Policy"]) {
       res.header(name, canonical[name]);
     }
@@ -1012,11 +1023,14 @@ export class SecurityHeadersMiddleware {
     SecurityHeadersMiddleware.cspDefaultWarned = true;
     const message =
       "TINA4_CSP is not set, so Tina4 is serving the default Content-Security-Policy " +
-      "\"default-src 'self'\" on every response. That default blocks runtime-injected " +
-      "inline styles, cross-origin fonts/scripts/CDNs, data: URIs, and cross-origin " +
-      "WebSocket/XHR (e.g. a separate API or LiveKit host). If your app uses any of " +
-      "these, set TINA4_CSP to a policy that allows them (see https://tina4.com); to " +
-      "silence this notice without changing behaviour, set TINA4_CSP=\"default-src 'self'\".";
+      "\"default-src 'self'\" on every response. The framework injects a per-response " +
+      "nonce into style-src and script-src, so its own inline <style>/<script> (and " +
+      "your templates using the csp_nonce() Frond global) work under this policy. The " +
+      "default still blocks cross-origin fonts/scripts/CDNs, data: URIs, and " +
+      "cross-origin WebSocket/XHR (e.g. a separate API or LiveKit host). If your app " +
+      "uses any of these, set TINA4_CSP to a policy that allows them (see " +
+      "https://tina4.com); to silence this notice without changing behaviour, set " +
+      "TINA4_CSP=\"default-src 'self'\".";
     try {
       Log.warning(message);
     } catch {

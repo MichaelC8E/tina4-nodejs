@@ -1785,6 +1785,21 @@ export function setFormTokenSessionId(sessionId: string): void {
   _formTokenSessionId = sessionId || "";
 }
 
+// CSP nonce provider (ADR-0088). Frond never imports @tina4/core (that would be
+// circular — core depends on frond), so core injects the per-response nonce
+// source through this setter. Default returns "" for standalone Frond use.
+let _cspNonceProvider: () => string = () => "";
+
+/**
+ * Register the function that backs the `{{ csp_nonce() }}` template global.
+ * @tina4/core calls this once with its request-scoped nonce source so every
+ * Frond instance (framework templates AND the app's) resolves the same nonce
+ * the Content-Security-Policy header names.
+ */
+export function setCspNonceProvider(fn: () => string): void {
+  _cspNonceProvider = fn;
+}
+
 function _buildFormTokenJwt(descriptor: string = ""): string {
   // Fail-closed, IDENTICAL to the validator (auth.ts validToken:
   // `secret ?? process.env.TINA4_SECRET ?? ""`). With TINA4_SECRET unset the
@@ -2013,6 +2028,14 @@ export class Frond {
     // Available alongside the |dump filter so both styles work:
     //   {{ user|dump }}   and   {{ dump(user) }}
     this.globals.dump = (value: unknown) => renderDump(value);
+
+    // CSP nonce (ADR-0088): {{ csp_nonce() }} returns the current response's
+    // nonce so a template can serve an inline <style>/<script> under the strict
+    // default Content-Security-Policy — <style nonce="{{ csp_nonce() }}">. The
+    // value matches the 'nonce-X' the security middleware puts in the CSP header.
+    // Frond stays zero-dependency: @tina4/core injects the provider (it never
+    // imports core); standalone Frond returns "".
+    this.globals.csp_nonce = () => _cspNonceProvider();
 
     // Drain the class-level registry. This is the key to surviving
     // hot-reloads AND the static-facade pattern: app.ts calls
