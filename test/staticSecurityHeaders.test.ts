@@ -54,8 +54,9 @@ function assert(name: string, condition: boolean, detail = ""): void {
   }
 }
 
+// content-security-policy is checked separately for its nonce structure
+// (ADR-0088): its value carries a per-response random nonce, never byte-equal.
 const WANTED: Record<string, string> = {
-  "content-security-policy": "default-src 'self'",
   "x-content-type-options": "nosniff",
   "x-frame-options": "SAMEORIGIN",
 };
@@ -73,10 +74,16 @@ function get(path: string, headers: Record<string, string> = {}): Promise<{ stat
 }
 
 function missing(headers: http.IncomingHttpHeaders): string {
-  return Object.entries(WANTED)
+  const bad = Object.entries(WANTED)
     .filter(([name, value]) => headers[name] !== value)
-    .map(([name, value]) => `[${name}=${String(headers[name])} want ${value}]`)
-    .join(" ");
+    .map(([name, value]) => `[${name}=${String(headers[name])} want ${value}]`);
+  // CSP must be the strict default plus a nonce in style-src AND script-src.
+  const csp = String(headers["content-security-policy"]);
+  if (!csp.startsWith("default-src 'self'") || !/style-src[^;]*'nonce-/.test(csp)
+      || !/script-src[^;]*'nonce-/.test(csp) || csp.includes("'unsafe-inline'")) {
+    bad.push(`[content-security-policy=${csp}]`);
+  }
+  return bad.join(" ");
 }
 
 // A route and the same kind of HTML on disk, in both static roots.

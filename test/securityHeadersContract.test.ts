@@ -62,12 +62,32 @@ function assert(name: string, condition: boolean, detail = ""): void {
 const CANONICAL: Record<string, string> = {
   "x-frame-options": "SAMEORIGIN",
   "x-content-type-options": "nosniff",
-  "content-security-policy": "default-src 'self'",
   "referrer-policy": "strict-origin-when-cross-origin",
   "x-xss-protection": "0",
   "permissions-policy": "camera=(), microphone=(), geolocation=()",
 };
+// content-security-policy is asserted separately (assertDefaultCsp): its value
+// carries a per-response random nonce (ADR-0088), so it is never byte-equal.
 const HSTS = "31536000";
+
+/** The default CSP: default-src 'self' plus a nonce in style-src + script-src (ADR-0088). */
+function assertDefaultCsp(value: string | undefined): [boolean, string] {
+  const v = String(value);
+  if (!v.startsWith("default-src 'self'")) return [false, `no default-src 'self': ${v}`];
+  const directives = Object.fromEntries(
+    v.split(";").map((d) => d.trim()).filter(Boolean).map((d) => [d.split(/\s+/)[0], d]),
+  );
+  for (const directive of ["style-src", "script-src"]) {
+    if (!(directives[directive] ?? "").includes("'nonce-")) return [false, `${directive} carries no nonce: ${v}`];
+  }
+  if (v.includes("'unsafe-inline'")) return [false, `CSP uses unsafe-inline: ${v}`];
+  return [true, ""];
+}
+/** Extract the first nonce from a CSP header value. */
+function cspNonceOf(value: string | undefined): string | null {
+  const m = /'nonce-([^']+)'/.exec(String(value));
+  return m ? m[1] : null;
+}
 
 /** GET /api/ping and resolve the raw response headers the server emitted. */
 function getHeaders(reqHeaders?: Record<string, string>): Promise<http.IncomingHttpHeaders> {
@@ -128,9 +148,14 @@ const server = await startServer({
   assert("a default app response carries the canonical security header set",
     allPresent && noHstsByDefault, `${detail}${noHstsByDefault ? "" : " [unexpected HSTS by default]"}`);
 
-  assert("csp defaults to default src self",
-    headers["content-security-policy"] === "default-src 'self'",
-    `got "${String(headers["content-security-policy"])}"`);
+  const [ok, why] = assertDefaultCsp(headers["content-security-policy"] as string | undefined);
+  assert("csp defaults to default-src 'self' + a nonce in style-src/script-src", ok, why);
+
+  // The nonce is per-response: two requests never share one (ADR-0088).
+  const second = await getHeaders();
+  const n1 = cspNonceOf(headers["content-security-policy"] as string | undefined);
+  const n2 = cspNonceOf(second["content-security-policy"] as string | undefined);
+  assert("each response gets a fresh csp nonce", !!n1 && !!n2 && n1 !== n2, `n1=${n1} n2=${n2}`);
 }
 
 // --- HSTS HTTPS-guarded ---

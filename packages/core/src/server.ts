@@ -42,6 +42,7 @@ import { MiddlewareChain, MiddlewareRunner, cors, requestLogger, isMiddlewareCla
 import { tryServeStatic } from "./static.js";
 import { loadEnv, isTruthy } from "./dotenv.js";
 import { isDebugMode } from "./errorOverlay.js";
+import { generateNonce, runWithCspNonce, currentCspNonce } from "./csp.js";
 import { createHealthRoutes } from "./health.js";
 import { rateLimiter } from "./rateLimiter.js";
 import { Log } from "./logger.js";
@@ -493,7 +494,8 @@ async function renderErrorPage(
   templatesDir: string,
 ): Promise<string | null> {
   try {
-    const { Frond } = await import("../../frond/src/engine.js");
+    const { Frond, setCspNonceProvider } = await import("../../frond/src/engine.js");
+    setCspNonceProvider(currentCspNonce);
     const templateFile = `errors/${code}.twig`;
 
     // Helper: get-or-create a cached Frond instance for a directory
@@ -706,6 +708,10 @@ export function resolveTemplate(pathname: string, templatesDir: string): string 
 
 function renderLandingPage(port: number = 7148): string {
   const version = TINA4_VERSION;
+  // The framework's welcome page runs under the strict default CSP. Every inline
+  // <style>/<script> below carries this response's nonce (ADR-0088); there are no
+  // style= or onclick= attributes (a nonce covers an element, never an attribute).
+  const nonce = currentCspNonce();
 
   const galleryItems = [
     { id: "rest-api", icon: "&#128640;", name: "REST API", desc: "A simple JSON API with GET and POST endpoints", accent: "accent-blue", tryUrl: "/api/gallery/hello" },
@@ -729,7 +735,7 @@ function renderLandingPage(port: number = 7148): string {
       : "";
     const deployBtn = isDeployed
       ? `<span class="gbtn gbtn-deployed">Deployed</span>`
-      : `<button class="gbtn gbtn-deploy" onclick="deployGallery('${item.id}')">Deploy</button>`;
+      : `<button class="gbtn gbtn-deploy" data-deploy="${item.id}">Deploy</button>`;
     return `<div class="gallery-card">
             <div class="accent ${item.accent}"></div>
             <div class="icon">${item.icon}</div>
@@ -745,7 +751,7 @@ function renderLandingPage(port: number = 7148): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tina4NodeJs</title>
-<style>
+<style nonce="${nonce}">
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;position:relative}
 .bg-watermark{position:fixed;bottom:-5%;right:-5%;width:45%;opacity:0.04;pointer-events:none;z-index:0}
@@ -784,6 +790,11 @@ h1{font-size:3rem;font-weight:700;margin-bottom:0.25rem;letter-spacing:-1px}
 .gbtn-deployed{background:transparent;border:1px solid #22c55e;color:#22c55e;cursor:default;font-size:0.7rem}
 @keyframes wiggle{0%{transform:rotate(0deg)}15%{transform:rotate(14deg)}30%{transform:rotate(-10deg)}45%{transform:rotate(8deg)}60%{transform:rotate(-4deg)}75%{transform:rotate(2deg)}100%{transform:rotate(0deg)}}
 .star-wiggle{display:inline-block;transform-origin:center}
+.gallery-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem}
+.tok-comment{color:#64748b}
+.tok-kw{color:#c084fc}
+.tok-str{color:#4ade80}
+.tok-fn{color:#38bdf8}
 </style>
 </head>
 <body>
@@ -809,23 +820,23 @@ h1{font-size:3rem;font-weight:700;margin-bottom:0.25rem;letter-spacing:-1px}
 <div class="section">
     <div class="card">
         <h2>Getting Started</h2>
-        <pre class="code-block"><code><span style="color:#64748b">// app.ts</span>
-<span style="color:#c084fc">import</span> { startServer, Router } <span style="color:#c084fc">from</span> <span style="color:#4ade80">"tina4-nodejs"</span>;
+        <pre class="code-block"><code><span class="tok-comment">// app.ts</span>
+<span class="tok-kw">import</span> { startServer, Router } <span class="tok-kw">from</span> <span class="tok-str">"tina4-nodejs"</span>;
 
-Router.get(<span style="color:#4ade80">"/hello"</span>, <span style="color:#c084fc">async</span> (<span style="color:#38bdf8">req</span>, <span style="color:#38bdf8">res</span>) =&gt; {
-    <span style="color:#c084fc">return</span> res.json({ message: <span style="color:#4ade80">"Hello World!"</span> });
+Router.get(<span class="tok-str">"/hello"</span>, <span class="tok-kw">async</span> (<span class="tok-fn">req</span>, <span class="tok-fn">res</span>) =&gt; {
+    <span class="tok-kw">return</span> res.json({ message: <span class="tok-str">"Hello World!"</span> });
 });
 
-startServer({ port: 7148 });  <span style="color:#64748b">// starts on port 7148</span></code></pre>
+startServer({ port: 7148 });  <span class="tok-comment">// starts on port 7148</span></code></pre>
     </div>
 </div>
 <div class="gallery">
     <h2 id="gallery">What You Can Build</h2>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem;">
+    <div class="gallery-cards">
         ${galleryCards}
     </div>
 </div>
-<script>
+<script nonce="${nonce}">
 function deployGallery(name) {
     if (!confirm('Deploy the "' + name + '" gallery example into your project? This will copy files into src/.')) return;
     fetch('/__dev/api/gallery/deploy', {
@@ -860,6 +871,12 @@ function deployGallery(name) {
     }
     setTimeout(doWiggle,3000);
 })();
+// CSP-clean wiring: no inline onclick handlers — bind every Deploy button from
+// its data-deploy attribute (a nonce covers script elements, not event-handler
+// attributes).
+document.querySelectorAll('.gbtn-deploy[data-deploy]').forEach(function(btn){
+    btn.addEventListener('click', function(){ deployGallery(btn.dataset.deploy); });
+});
 </script>
 </body>
 </html>`;
@@ -1685,7 +1702,8 @@ export async function buildDispatchContext(router: Router, base?: string): Promi
 
   let frondEngine: DispatchContext["frondEngine"] = null;
   try {
-    const { Frond } = await import("../../frond/src/engine.js");
+    const { Frond, setCspNonceProvider } = await import("../../frond/src/engine.js");
+    setCspNonceProvider(currentCspNonce);
     frondEngine = new Frond(templatesDir);
   } catch {
     // Frond not available — template-route fallback stays inert, same guard startServer() uses.
@@ -1891,7 +1909,14 @@ export async function runDispatch(
   // requests interleaving on the one event loop never read each other's id.
   const requestId = Log.sanitizeRequestId(rawReq.headers["x-request-id"]) ?? randomBytes(4).toString("hex");
   if (!rawRes.headersSent) rawRes.setHeader("x-request-id", requestId);
-  return Log.runWithRequestId(requestId, () => dispatchInner(ctx, rawReq, rawRes, requestId));
+  // One CSP nonce per request (ADR-0088), established in the SAME async scope as
+  // the request id so the inline HTML body, the Frond csp_nonce() global, and the
+  // security middleware's Content-Security-Policy header all name one value - and
+  // two requests interleaving on the one event loop never share it.
+  const requestNonce = generateNonce();
+  return Log.runWithRequestId(requestId, () =>
+    runWithCspNonce(requestNonce, () => dispatchInner(ctx, rawReq, rawRes, requestId)),
+  );
 }
 
 /**
@@ -2128,7 +2153,8 @@ export async function startServer(config?: Tina4Config): Promise<{
   let frondEngine: any = null;
   setDefaultTemplatesDir(templatesDir);
   try {
-    const { Frond } = await import("../../frond/src/engine.js");
+    const { Frond, setCspNonceProvider } = await import("../../frond/src/engine.js");
+    setCspNonceProvider(currentCspNonce);
     frondEngine = new Frond(templatesDir);
 
     // Always-on Frond {% live %} refresh endpoint. Re-renders a server-rendered

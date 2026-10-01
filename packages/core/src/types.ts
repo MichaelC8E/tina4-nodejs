@@ -126,6 +126,14 @@ export interface Tina4ResponseMethods {
   stream(source: AsyncIterable<string | Buffer>, contentType?: string): Promise<Tina4Response>;
   /** The underlying ServerResponse for advanced use */
   raw: ServerResponse;
+  /**
+   * This response's Content-Security-Policy nonce (ADR-0088). `runDispatch()`
+   * mints one per request and publishes it on the async-context (csp.ts) so the
+   * framework's inline `<style>`/`<script>`, the Frond `csp_nonce()` global, and
+   * the value the security middleware names in the header all agree. Stamp it on
+   * any inline block a route emits: `<script nonce="${res.cspNonce}">`.
+   */
+  cspNonce: string;
 }
 
 /**
