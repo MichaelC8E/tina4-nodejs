@@ -71,8 +71,8 @@ function cspNonce(csp: string | undefined): string | null {
 
 /** Every inline <style>/<script> (not <script src=...>) in `html` carries `nonce`. */
 function everyInlineTagCarries(html: string, nonce: string): boolean {
-  const styles = [...html.matchAll(/<style\b([^>]*)>/g)].map((m) => m[1]);
-  const scripts = [...html.matchAll(/<script\b([^>]*)>/g)].map((m) => m[1]);
+  const styles = [...html.matchAll(/<style\b([^>]*)>/gi)].map((m) => m[1]);
+  const scripts = [...html.matchAll(/<script\b([^>]*)>/gi)].map((m) => m[1]);
   if (styles.length === 0 && scripts.length === 0) return true; // vacuously clean
   for (const attrs of styles) if (!attrs.includes(`nonce="${nonce}"`)) return false;
   for (const attrs of scripts) {
@@ -114,7 +114,7 @@ try {
   assert("welcome: script-src carries a nonce", /script-src[^;]*'nonce-/.test(String(csp)), String(csp));
   assert("welcome: CSP never uses unsafe-inline", !String(csp).includes("'unsafe-inline'"), String(csp));
   assert("welcome: body has an inline <style> and <script>",
-    /<style\b/.test(welcome.body) && /<script\b/.test(welcome.body));
+    /<style\b/i.test(welcome.body) && /<script\b/i.test(welcome.body));
   assert("welcome: every inline <style>/<script> carries the header nonce",
     !!nonce && everyInlineTagCarries(welcome.body, nonce),
     `nonce=${nonce}`);
