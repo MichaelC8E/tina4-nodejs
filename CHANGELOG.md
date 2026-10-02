@@ -6,6 +6,10 @@ number means the same thing everywhere.
 **The authoritative release notes for every shipped version live in the documentation:**
 https://tina4.com/nodejs/36-releases
 
+## 3.13.144 — 2026-10-02
+
+HEAD responses are locked to exactly one `Content-Length` on the wire, equal to the length the GET would have sent. A HEAD emitting two differing `Content-Length` headers is malformed (RFC 7230 s3.3.2); a strict proxy (nginx) 502s it while lenient clients show 200. Node already behaves correctly (it wraps write/end early, so every path is covered by construction); this release LOCKS it with a raw-socket conformance test that counts the literal `content-length` lines and asserts a routed HEAD reports the GET length, not 0 - `fetch()` collapses a duplicate header, so only the raw wire shows it. Companion to the tina4-php fix in the same release, where a routed HEAD shipped `Content-Length: 0`. No runtime behaviour change in node. The framework still has no required runtime dependencies.
+
 ## 3.13.143 — 2026-10-01
 
 A fresh project's own styling now loads under the strict default Content-Security-Policy. The framework serves `default-src 'self'`, which a browser enforces by refusing every inline `<style>` and `<script>` -- so a new project rendered unstyled with its scripts blocked. The framework now mints one nonce per response, injects it into the `style-src` and `script-src` directives, and stamps it on every inline block it emits, de-inlining the `style=` and `on*=` attributes it used to rely on; a template that needs an inline block stamps `csp_nonce()` on it (ADR-0088, #110). A session's expiry now slides on activity: a read-only request that touched a stored session re-writes the merged record to move the deadline forward, so a request in flight next to a logout no longer loses the wrong state (ADR-0087, #108). Internally, the loop-block watchdog test's readiness probe now waits for a real HTTP response instead of a bare TCP connect, so a port-takeover gap can no longer surface as a `fetch failed` -- a continuous-integration flake fix with no runtime change (#111). The framework still has no required runtime dependencies.
