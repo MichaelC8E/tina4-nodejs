@@ -30,6 +30,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createConnection } from "node:net";
 import { startServer } from "../packages/core/src/index.ts";
 import { freePort } from "./freePort.ts";
 
@@ -56,6 +57,24 @@ async function req(method: string, path: string) {
   const r = await fetch(`http://127.0.0.1:${PORT}${path}`, { method });
   return { status: r.status, body: await r.text(), headers: r.headers };
 }
+
+// A RAW request over a socket: fetch()'s Headers collapses a duplicate
+// Content-Length into one, which is exactly how the bug stayed hidden. The raw
+// wire is the only place a duplicate is visible.
+function rawRequest(method: string, path: string): Promise<string> {
+  return new Promise((resolve) => {
+    const sock = createConnection({ port: PORT, host: "127.0.0.1" }, () => {
+      sock.write(`${method} ${path} HTTP/1.1\r\nHost: 127.0.0.1:${PORT}\r\nConnection: close\r\n\r\n`);
+    });
+    let buf = "";
+    sock.setTimeout(5000, () => { sock.destroy(); resolve(buf); });
+    sock.on("data", (d) => { buf += d.toString("latin1"); });
+    sock.on("end", () => resolve(buf));
+    sock.on("error", () => resolve(buf));
+  });
+}
+const contentLengthCount = (raw: string): number =>
+  (raw.split("\r\n\r\n")[0].match(/^content-length:/gim) ?? []).length;
 
 console.log("=== HEAD carries no body, on every path (Node) ===\n");
 
@@ -86,6 +105,34 @@ try {
     assert("a head still reports the content length the get would have sent",
       length !== null && Number(length) === statSync(join(publicDir, "asset.css")).size,
       `content-length=${length}`);
+  }
+  {
+    // A HEAD answer must carry EXACTLY ONE Content-Length - never a duplicate.
+    // The real-world failure this locks: a HEAD emitting both `content-length: 0`
+    // (stripped empty body) and `Content-Length: <n>` (the GET length) is
+    // malformed (RFC 7230 s3.3.2 / RFC 9110 s6.4.1); lenient clients tolerate it
+    // and show 200, but a strict proxy (nginx) 502s the upstream - so every app
+    // behind such an ingress broke on HEAD while 'it works locally'. Checked on
+    // the RAW wire because fetch()/a dict collapse the duplicate and prove nothing.
+    for (const path of ["/asset.css", "/routed"]) {
+      const raw = await rawRequest("HEAD", path);
+      const n = contentLengthCount(raw);
+      assert(`a head on ${path} emits exactly one content-length`,
+        n === 1, `emitted ${n} (a strict proxy 502s a duplicate):\n${raw.split("\r\n\r\n")[0]}`);
+    }
+    const rawGet = await rawRequest("GET", "/asset.css");
+    assert("a get emits exactly one content-length",
+      contentLengthCount(rawGet) === 1, `emitted ${contentLengthCount(rawGet)}`);
+  }
+  {
+    // s9.3.2 SHOULD, on a DYNAMIC route too: HEAD reports the length the GET
+    // would have sent, not 0 - a probe on a routed endpoint learns the size.
+    const rawHead = await rawRequest("HEAD", "/routed");
+    const rawGet = await rawRequest("GET", "/routed");
+    const cl = (raw: string): string => (raw.split("\r\n\r\n")[0].match(/^content-length:\s*(\d+)/im) ?? [])[1] ?? "";
+    assert("a head on a routed response reports the get's content length",
+      cl(rawHead) !== "" && cl(rawHead) === cl(rawGet),
+      `HEAD content-length=${cl(rawHead) || "(none)"} vs GET=${cl(rawGet)}`);
   }
   {
     // NEGATIVE: stripping HEAD must not have broken GET.
