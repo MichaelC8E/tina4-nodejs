@@ -533,7 +533,7 @@ export const Plan = {
     const title = currentPlan.title || target;
     const goal = currentPlan.goal || "";
 
-    const aiUrl = process.env.TINA4_AI_URL || "http://localhost:11437/api/chat";
+    const aiUrl = process.env.TINA4_AI_URL || "http://localhost:11435/api/chat";
     const aiModel = process.env.TINA4_AI_MODEL || "qwen2.5-coder:14b";
     const prompts = fleshPrompt(title, goal, existing, prompt);
     const fetched = await fetchFleshReply(aiUrl, aiModel, prompts);

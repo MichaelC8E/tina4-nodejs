@@ -69,7 +69,11 @@ export function enginePath(): string | null {
 function runEngine(target: string): Record<string, any> {
   const binary = enginePath();
   if (!binary) throw new MetricsEngineError(`tina4 not found on PATH - ${INSTALL_HINT}`);
-  const processResult = spawnSync(binary, ["metrics", "--path", target, "--json"], {
+  // --no-history: a dashboard READ must never write .tina4-metrics.json.
+  // Without it every scan records history, the file watcher sees the write and
+  // reloads the page, which re-scans - a self-inflicted ~2-second reload loop
+  // that makes the dashboard unusable.
+  const processResult = spawnSync(binary, ["metrics", "--path", target, "--json", "--no-history"], {
     encoding: "utf8",
     timeout: 60_000,
     maxBuffer: 64 * 1024 * 1024,
