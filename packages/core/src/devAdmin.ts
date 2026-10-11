@@ -830,6 +830,7 @@ export class DevAdmin {
       { method: "GET", pattern: "/__dev/api/docs/.well-known.json", handler: handleDocsWellKnown },
       // JS asset
       { method: "GET", pattern: "/__dev/js/tina4-dev-admin.min.js", handler: handleDevAdminJs },
+      { method: "GET", pattern: "/__dev/split", handler: handleDevAdminSplit },
       // Dev-toolbar assets — served as external CSS/JS so the injected toolbar is
       // CSP-clean (no inline style=, onclick=, or <script>) under a strict
       // `default-src 'self'`. Parity with PHP's /__dev/toolbar.css + toolbar.js.
@@ -3137,6 +3138,38 @@ const handleDevAdminJs: RouteHandler = async (_req, res) => {
   // File not found — no legacy fallback
   res.raw.writeHead(404, { "Content-Type": "text/plain" });
   res.raw.end("tina4-dev-admin.min.js not found");
+};
+
+// ---------------------------------------------------------------------------
+// Dev Admin split view — the shared asset (same file python/php/ruby serve)
+// ---------------------------------------------------------------------------
+
+const handleDevAdminSplit: RouteHandler = async (_req, res) => {
+  const { readFileSync, existsSync } = await import("node:fs");
+  const { dirname, join, resolve } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const dir = dirname(fileURLToPath(import.meta.url));
+
+  const candidates = [
+    join(dir, "..", "public", "js", "tina4-dev-admin-split.html"),
+    join(dir, "..", "..", "public", "js", "tina4-dev-admin-split.html"),
+    resolve(process.cwd(), "node_modules", "tina4-nodejs", "packages", "core", "public", "js", "tina4-dev-admin-split.html"),
+    resolve(process.cwd(), "public", "js", "tina4-dev-admin-split.html"),
+  ];
+
+  for (const path of candidates) {
+    if (existsSync(path)) {
+      try {
+        const content = readFileSync(path, "utf-8");
+        res.raw.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
+        res.raw.end(content);
+        return;
+      } catch { /* try next */ }
+    }
+  }
+
+  res.raw.writeHead(404, { "Content-Type": "text/plain" });
+  res.raw.end("tina4-dev-admin-split.html not found");
 };
 
 // ---------------------------------------------------------------------------
