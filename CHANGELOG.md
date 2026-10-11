@@ -6,6 +6,15 @@ number means the same thing everywhere.
 **The authoritative release notes for every shipped version live in the documentation:**
 https://tina4.com/nodejs/36-releases
 
+## 3.13.150 — 2026-10-11
+
+### Dev admin
+- The dashboard AI talks to the `tina4 ai serve` gateway on :11435, not a model
+  directly; `/__dev/split` serves the shared split-preview asset via a thin route;
+  and the Code Landscape metrics bubbles are free to spread (zoom-out + Fit frame
+  the layout, was crammed into the viewport). The dashboard metrics scan passes
+  `--no-history` so it stops self-reloading. Shipped in the shared SPA bundle.
+
 ## 3.13.149 — 2026-10-10
 ### CRUD
 - A CRUD admin page out of the box: `await Crud.toCrud(req, { model: Model })` renders a searchable, sortable, paginated admin screen and registers the model's AutoCrud routes (ADR-0094).
