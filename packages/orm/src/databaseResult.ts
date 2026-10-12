@@ -8,6 +8,16 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import type { DatabaseAdapter, ColumnInfo } from "./types.js";
 
+// Strip the "(args)" from a column type ("VARCHAR(255)" -> "VARCHAR",
+// "INT(11) UNSIGNED" -> "INT UNSIGNED"). ReDoS-safe: indexOf/slice, not the old
+// /\([^)]*\)/ which backtracks O(n^2) across many '(' (js/polynomial-redos).
+function stripTypeArgs(colType: string): string {
+  const open = colType.indexOf("(");
+  if (open < 0) return colType;
+  const close = colType.indexOf(")", open);
+  return close < 0 ? colType : colType.slice(0, open) + colType.slice(close + 1);
+}
+
 /** Column metadata returned by columnInfo(). */
 export interface ColumnInfoResult {
   name: string;
@@ -261,7 +271,7 @@ export class DatabaseResult implements Iterable<Record<string, unknown>> {
       const [size, decimals] = this._parseTypeSize(colType);
       return {
         name: col.name,
-        type: colType.replace(/\([^)]*\)/, ""),
+        type: stripTypeArgs(colType),
         size,
         decimals,
         nullable: col.nullable ?? true,
