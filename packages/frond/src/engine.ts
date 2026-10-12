@@ -313,8 +313,6 @@ const FAST_FILTERS: Record<string, (value: unknown) => unknown> = {
 // common types. Matches PHP sprintf / Python % / Ruby format so the `format`
 // filter renders e.g. `{{ '%.2f' | format(n) }}` as "3.14" across all engines.
 const FORMAT_RE = /%%|%([-+ 0]*)(\d+)?(?:\.(\d+))?([sdifFeEgGxXob])/g;
-const LEADING_WS_RE = /^\s+/;
-const TRAILING_WS_RE = /\s+$/;
 const THOUSANDS_RE = /\B(?=(\d{3})+(?!\d))/g;
 // {% live "name" poll N | sse | ws "path" [src "url"] %}
 const LIVE_RE = /^live\s+["']([^"']+)["']([\s\S]*)$/;
@@ -420,47 +418,90 @@ function sweepExpiredCache(cache: Map<string, [string, number]>): void {
 }
 
 // ── Lexer ──────────────────────────────────────────────────────
+//
+// ReDoS note: this lexer is an INDEX-BASED forward scan, not a backtracking
+// regex. The old `/( \{%…[\s\S]*?…%\} )|…/g` + `/\{%…raw…([\s\S]*?)…endraw…/g`
+// pair ran O(n^2) on V8 for a crafted "many openers, no closer" input (a lazy
+// body re-scanned from every opener), so an ~8 KB template value could hang the
+// event loop for tens of seconds. `indexOf` never backtracks; the per-kind
+// "no more closers" cache below keeps even the pathological case linear.
 
-const TOKEN_RE = /(\{%-?\s*[\s\S]*?\s*-?%\})|(\{\{-?\s*[\s\S]*?\s*-?\}\})|(\{#[\s\S]*?#\})/g;
+// Raw-block delimiters. These are BOUNDED (fixed keyword, no lazy body), so they
+// cannot backtrack — the ReDoS lived only in the `[\s\S]*?` body, which is gone.
+const RAW_OPEN_RE = /\{%-?\s*raw\s*-?%\}/g;
+const RAW_CLOSE_RE = /\{%-?\s*endraw\s*-?%\}/g;
 
-// Regex to extract {% raw %}...{% endraw %} blocks before tokenizing
-const RAW_BLOCK_RE = /\{%-?\s*raw\s*-?%\}([\s\S]*?)\{%-?\s*endraw\s*-?%\}/g;
-
-function tokenize(source: string): Token[] {
-  // 1. Extract raw blocks and replace with placeholders
+// Extract {% raw %}…{% endraw %} blocks, replacing each with a NUL-wrapped
+// placeholder so its body is never tokenized. First opener → first endraw after
+// it (matches the old non-greedy body). An opener with no endraw anywhere is left
+// in place (it tokenizes as an ordinary {% raw %} BLOCK, exactly as before).
+function extractRawBlocks(source: string): { source: string; rawBlocks: string[] } {
   const rawBlocks: string[] = [];
-  source = source.replace(RAW_BLOCK_RE, (_match, content) => {
-    const idx = rawBlocks.length;
-    rawBlocks.push(content);
-    return `\x00RAW_${idx}\x00`;
-  });
-
-  // 2. Normal tokenization
-  const tokens: Token[] = [];
+  let out = "";
   let pos = 0;
+  RAW_OPEN_RE.lastIndex = 0;
+  let om: RegExpExecArray | null;
+  while ((om = RAW_OPEN_RE.exec(source)) !== null) {
+    const openStart = om.index;
+    const openEnd = RAW_OPEN_RE.lastIndex;
+    RAW_CLOSE_RE.lastIndex = openEnd;
+    const cm = RAW_CLOSE_RE.exec(source);
+    if (cm === null) break; // no endraw after this opener → none after any later one
+    const idx = rawBlocks.length;
+    rawBlocks.push(source.slice(openEnd, cm.index));
+    out += source.slice(pos, openStart) + `\x00RAW_${idx}\x00`;
+    pos = RAW_CLOSE_RE.lastIndex;
+    RAW_OPEN_RE.lastIndex = pos; // continue after the endraw
+  }
+  out += source.slice(pos);
+  return { source: out, rawBlocks };
+}
 
-  TOKEN_RE.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = TOKEN_RE.exec(source)) !== null) {
-    const start = m.index;
-    if (start > pos) {
-      tokens.push(["TEXT", source.slice(pos, start)]);
-    }
+const TAG_KINDS: Record<string, { close: string; type: TokenType }> = {
+  "%": { close: "%}", type: "BLOCK" },
+  "{": { close: "}}", type: "VAR" },
+  "#": { close: "#}", type: "COMMENT" },
+};
 
-    const raw = m[0];
-    if (raw.startsWith("{#")) {
-      tokens.push(["COMMENT", raw]);
-    } else if (raw.startsWith("{{")) {
-      tokens.push(["VAR", raw]);
-    } else if (raw.startsWith("{%")) {
-      tokens.push(["BLOCK", raw]);
+function tokenize(rawSource: string): Token[] {
+  // 1. Extract raw blocks and replace with placeholders
+  const { source, rawBlocks } = extractRawBlocks(rawSource);
+
+  // 2. Forward index scan — find each '{', classify it, jump to its close.
+  const tokens: Token[] = [];
+  const n = source.length;
+  let pos = 0; // start of the current TEXT run
+  let scan = 0; // where to look for the next '{'
+  // Once a close delimiter has no occurrence beyond some point it never will
+  // (indexOf is monotonic as `scan` only advances), so remember it and skip that
+  // kind in O(1) instead of re-scanning to EOF for every dead opener.
+  const exhausted: Record<string, boolean> = { "%}": false, "}}": false, "#}": false };
+
+  while (scan < n) {
+    const brace = source.indexOf("{", scan);
+    if (brace === -1) break;
+    const kind = TAG_KINDS[source[brace + 1]];
+    if (!kind) {
+      scan = brace + 1; // a '{' that starts no tag — part of TEXT
+      continue;
     }
-    pos = m.index + raw.length;
+    if (exhausted[kind.close]) {
+      scan = brace + 1; // no matching close remains — treat as TEXT, keep scanning
+      continue;
+    }
+    const close = source.indexOf(kind.close, brace + 2);
+    if (close === -1) {
+      exhausted[kind.close] = true;
+      scan = brace + 1;
+      continue;
+    }
+    if (brace > pos) tokens.push(["TEXT", source.slice(pos, brace)]);
+    tokens.push([kind.type, source.slice(brace, close + 2)]);
+    pos = close + 2;
+    scan = close + 2;
   }
 
-  if (pos < source.length) {
-    tokens.push(["TEXT", source.slice(pos)]);
-  }
+  if (pos < n) tokens.push(["TEXT", source.slice(pos)]);
 
   // 3. Restore raw block placeholders as literal TEXT
   if (rawBlocks.length > 0) {
@@ -1610,8 +1651,8 @@ const BUILTIN_FILTERS: Record<string, FilterFn> = {
   capitalize: (v) => { const s = String(v); return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase(); },
   title: (v) => String(v).replace(TITLE_WORD_RE, c => c.toUpperCase()),
   trim: (v) => String(v).trim(),
-  ltrim: (v) => String(v).replace(LEADING_WS_RE, ""),
-  rtrim: (v) => String(v).replace(TRAILING_WS_RE, ""),
+  ltrim: (v) => String(v).trimStart(),
+  rtrim: (v) => String(v).trimEnd(),
   length: (v) => {
     if (Array.isArray(v)) return v.length;
     if (typeof v === "string") return v.length;
@@ -1768,7 +1809,7 @@ const BUILTIN_FILTERS: Record<string, FilterFn> = {
 // ── Form Token ────────────────────────────────────────────────
 
 function _b64url(data: Buffer): string {
-  return data.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return data.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/={1,2}$/, "");
 }
 
 /**
@@ -2479,21 +2520,21 @@ export class Frond {
 
   private renderVarToken(tokens: Token[], index: number, context: Record<string, unknown>, output: string[]): number {
     const [content, stripB, stripA] = stripTag(tokens[index][1]);
-    if (stripB && output.length > 0) output[output.length - 1] = output[output.length - 1].replace(TRAILING_WS_RE, "");
+    if (stripB && output.length > 0) output[output.length - 1] = output[output.length - 1].trimEnd();
     const result = this.evalVar(content, context);
     output.push(result !== null && result !== undefined ? String(result) : "");
     if (stripA && index + 1 < tokens.length && tokens[index + 1][0] === "TEXT") {
-      tokens[index + 1] = ["TEXT", tokens[index + 1][1].replace(LEADING_WS_RE, "")];
+      tokens[index + 1] = ["TEXT", tokens[index + 1][1].trimStart()];
     }
     return index + 1;
   }
 
   private renderBlockToken(tokens: Token[], index: number, context: Record<string, unknown>, output: string[]): number {
     const [content, stripB, stripA] = stripTag(tokens[index][1]);
-    if (stripB && output.length > 0) output[output.length - 1] = output[output.length - 1].replace(TRAILING_WS_RE, "");
+    if (stripB && output.length > 0) output[output.length - 1] = output[output.length - 1].trimEnd();
     const tag = content.split(/\s+/)[0] || "";
     if (stripA && index + 1 < tokens.length && tokens[index + 1][0] === "TEXT") {
-      tokens[index + 1] = ["TEXT", tokens[index + 1][1].replace(LEADING_WS_RE, "")];
+      tokens[index + 1] = ["TEXT", tokens[index + 1][1].trimStart()];
     }
     let next: number;
     if (tag === "if" && this.tagPermitted(tag)) {
@@ -2510,7 +2551,7 @@ export class Frond {
       next = block.next;
     }
     if (stripA && next < tokens.length && tokens[next][0] === "TEXT") {
-      tokens[next] = ["TEXT", tokens[next][1].replace(LEADING_WS_RE, "")];
+      tokens[next] = ["TEXT", tokens[next][1].trimStart()];
     }
     return next;
   }
@@ -2839,7 +2880,7 @@ export class Frond {
   ): void {
     if (stripBefore && branchTokens.length > 0 && branchTokens[branchTokens.length - 1][0] === "TEXT") {
       const last = branchTokens[branchTokens.length - 1];
-      branchTokens[branchTokens.length - 1] = ["TEXT", last[1].replace(TRAILING_WS_RE, "")];
+      branchTokens[branchTokens.length - 1] = ["TEXT", last[1].trimEnd()];
     }
     branches.push([condition, branchTokens]);
   }
@@ -2872,7 +2913,7 @@ export class Frond {
       } else if (tag === "endif") {
         this.pushIfBranch(branches, currentCond, currentTokens, tagStripB);
         if (tagStripA && i + 1 < tokens.length && tokens[i + 1][0] === "TEXT") {
-          tokens[i + 1] = ["TEXT", tokens[i + 1][1].replace(LEADING_WS_RE, "")];
+          tokens[i + 1] = ["TEXT", tokens[i + 1][1].trimStart()];
         }
         return { branches, next: i + 1 };
       } else if ((tag === "elseif" || tag === "elif") && depth === 0) {
