@@ -21,7 +21,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
  * Run with: npx tsx test/fileUploadContract.test.ts
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { request } from "node:http";
@@ -116,6 +116,66 @@ console.log("\n--- safe-save confines the write ---");
   }
   // safe save refuses an unusable filename
   assert("safe save refuses an unusable filename", refusedDotDot && refusedNul);
+  rmSync(root, { recursive: true, force: true });
+}
+
+for (const link of ["symlink", "dangling", "hardlink"]) {
+  const root = mkdtempSync(join(tmpdir(), "tina4-safesave-link-"));
+  const target = join(root, "uploads");
+  const outside = join(root, "outside");
+  mkdirSync(target, { recursive: true });
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(join(outside, "loot"), "ORIGINAL");
+  if (link === "symlink") symlinkSync(join(outside, "loot"), join(target, "pic.txt"));
+  else if (link === "dangling") symlinkSync(join(outside, "new.txt"), join(target, "pic.txt"));
+  else linkSync(join(outside, "loot"), join(target, "pic.txt"));
+
+  saveUpload({ fieldName: "f", filename: "pic.txt", type: "text/plain", content: Buffer.from("UPLOADED"), size: 8 } as UploadedFile, target);
+
+  const outsideUntouched = readFileSync(join(outside, "loot")).toString() === "ORIGINAL" && !existsSync(join(outside, "new.txt"));
+  const replaced = !lstatSync(join(target, "pic.txt")).isSymbolicLink()
+    && readFileSync(join(target, "pic.txt")).toString() === "UPLOADED";
+  const alone = readdirSync(target).join(",") === "pic.txt";
+  assert(`safe save replaces a ${link} at the name instead of writing through it`, outsideUntouched && replaced && alone,
+    `outsideUntouched=${outsideUntouched} replaced=${replaced} entries=${readdirSync(target).join(",")}`);
+  rmSync(root, { recursive: true, force: true });
+}
+const upload = (name: string, body: string) =>
+  ({ fieldName: "f", filename: name, type: "text/plain", content: Buffer.from(body), size: body.length }) as UploadedFile;
+if (process.platform !== "win32") {
+  const root = mkdtempSync(join(tmpdir(), "tina4-safesave-mode-"));
+  const target = join(root, "uploads");
+  mkdirSync(target, { recursive: true });
+  writeFileSync(join(target, "run.sh"), "OLD CONTENT");
+  chmodSync(join(target, "run.sh"), 0o755);
+  saveUpload(upload("run.sh", "NEW"), target);
+  const mode = statSync(join(target, "run.sh")).mode & 0o777;
+  assert("safe save rewrites a plain file in place, keeping its mode",
+    readFileSync(join(target, "run.sh")).toString() === "NEW" && mode === 0o755, `mode=${mode.toString(8)}`);
+  rmSync(root, { recursive: true, force: true });
+}
+if (process.platform !== "win32" && process.getuid?.() !== 0) {
+  const root = mkdtempSync(join(tmpdir(), "tina4-safesave-ro-"));
+  const target = join(root, "uploads");
+  mkdirSync(target, { recursive: true });
+  writeFileSync(join(target, "pic.txt"), "ORIGINAL");
+  chmodSync(join(target, "pic.txt"), 0o444);
+  let code = "";
+  try {
+    saveUpload(upload("pic.txt", "UPLOADED"), target);
+  } catch (err) {
+    code = (err as NodeJS.ErrnoException).code ?? "";
+  }
+  assert("safe save refuses a file it may not write",
+    code === "EACCES" && readFileSync(join(target, "pic.txt")).toString() === "ORIGINAL", `code=${code}`);
+  rmSync(root, { recursive: true, force: true });
+}
+{
+  const root = mkdtempSync(join(tmpdir(), "tina4-safesave-long-"));
+  const target = join(root, "uploads");
+  const name = "a".repeat(240) + ".txt";
+  saveUpload(upload(name, "UPLOADED"), target);
+  assert("safe save takes any name the filesystem takes", readFileSync(join(target, name)).toString() === "UPLOADED");
   rmSync(root, { recursive: true, force: true });
 }
 

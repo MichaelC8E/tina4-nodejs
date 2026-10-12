@@ -7,7 +7,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 */
 
 import type { IncomingMessage, IncomingHttpHeaders } from "node:http";
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Tina4Request, UploadedFile } from "./types.js";
 import { resolveClientIp, isTrustedProxy } from "./trustedProxy.js";
@@ -406,13 +406,31 @@ export function saveUpload(file: UploadedFile, targetDir: string, filename?: str
   mkdirSync(targetDir, { recursive: true });
   const dest = join(targetDir, base);
   // Defence in depth: the resolved parent of the destination must be exactly
-  // the resolved target dir (guards a pre-existing symlink at target/base).
+  // the resolved target dir.
   const realDir = realpathSync(targetDir);
   const realParent = realpathSync(dirname(dest));
   if (realParent !== realDir) {
     throw new Error(`refusing to write outside ${targetDir}: ${JSON.stringify(raw)}`);
   }
-  writeFileSync(dest, file.content);
+  // Never write THROUGH a link already at target/base: a symlink (even a
+  // dangling one) leads out of targetDir, and a hard link shares its bytes
+  // with a file elsewhere. Such an entry is removed so the upload gets a file
+  // of its own; a plain file is rewritten in place and keeps its mode.
+  if (lstatSync(dest, { throwIfNoEntry: false })?.isSymbolicLink()) unlinkSync(dest);
+  const flags = constants.O_WRONLY | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0);
+  let fd = openSync(dest, flags, 0o666);
+  try {
+    if (fstatSync(fd).nlink > 1) {
+      closeSync(fd);
+      fd = -1;
+      unlinkSync(dest);
+      fd = openSync(dest, flags | constants.O_EXCL, 0o666);
+    }
+    ftruncateSync(fd, 0);
+    writeFileSync(fd, file.content);
+  } finally {
+    if (fd >= 0) closeSync(fd);
+  }
   return dest;
 }
 
