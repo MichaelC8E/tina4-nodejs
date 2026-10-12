@@ -37,6 +37,7 @@ import {
   compressionEtagIntercept,
   sessionAutoStart,
 } from "./dispatchPipeline.js";
+import { runWithFormTokenSession, currentFormTokenSessionId } from "./session.js";
 import { createResponse, setDefaultTemplatesDir, wantsJson, negotiatedErrorBody } from "./response.js";
 import { MiddlewareChain, MiddlewareRunner, cors, requestLogger, isMiddlewareClass, attachCsrfFromEnv, SecurityHeadersMiddleware } from "./middleware.js";
 import { tryServeStatic } from "./static.js";
@@ -1705,8 +1706,9 @@ export async function buildDispatchContext(router: Router, base?: string): Promi
 
   let frondEngine: DispatchContext["frondEngine"] = null;
   try {
-    const { Frond, setCspNonceProvider } = await import("../../frond/src/engine.js");
+    const { Frond, setCspNonceProvider, setFormTokenSessionProvider } = await import("../../frond/src/engine.js");
     setCspNonceProvider(currentCspNonce);
+    setFormTokenSessionProvider(currentFormTokenSessionId);
     frondEngine = new Frond(templatesDir);
   } catch {
     // Frond not available — template-route fallback stays inert, same guard startServer() uses.
@@ -1918,7 +1920,9 @@ export async function runDispatch(
   // two requests interleaving on the one event loop never share it.
   const requestNonce = generateNonce();
   return Log.runWithRequestId(requestId, () =>
-    runWithCspNonce(requestNonce, () => dispatchInner(ctx, rawReq, rawRes, requestId)),
+    runWithCspNonce(requestNonce, () =>
+      runWithFormTokenSession(() => dispatchInner(ctx, rawReq, rawRes, requestId)),
+    ),
   );
 }
 
@@ -2156,8 +2160,9 @@ export async function startServer(config?: Tina4Config): Promise<{
   let frondEngine: any = null;
   setDefaultTemplatesDir(templatesDir);
   try {
-    const { Frond, setCspNonceProvider } = await import("../../frond/src/engine.js");
+    const { Frond, setCspNonceProvider, setFormTokenSessionProvider } = await import("../../frond/src/engine.js");
     setCspNonceProvider(currentCspNonce);
+    setFormTokenSessionProvider(currentFormTokenSessionId);
     frondEngine = new Frond(templatesDir);
 
     // Always-on Frond {% live %} refresh endpoint. Re-renders a server-rendered

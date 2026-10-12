@@ -1746,7 +1746,7 @@ function hasSetCookie(raw: unknown): boolean {
  *   genuinely public page cacheable for cookie-bearing browsers.
  */
 function mayStore(
-  req: { headers?: Record<string, unknown> },
+  req: { headers?: Record<string, unknown>; session?: { isFresh?: () => boolean } },
   vary: string[],
   cacheControl: unknown,
   setCookie: unknown,
@@ -1757,6 +1757,11 @@ function mayStore(
   if (requestHeader(req, "authorization") !== undefined) return sharedCacheAllowed(cacheControl);
   if (requestHeader(req, "cookie") !== undefined) return sharedCacheAllowed(cacheControl);
   if (hasSetCookie(setCookie)) return sharedCacheAllowed(cacheControl);
+  // The session cookie is added after this check, so a response that is about
+  // to install one carries no Set-Cookie yet: a request that came without a
+  // cookie and leaves its session holding data (a form token bound to it marks
+  // it) is that case.
+  if (req.session?.isFresh && !req.session.isFresh()) return sharedCacheAllowed(cacheControl);
   return true;
 }
 

@@ -32,6 +32,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
  *   session.get("user");  // { name: "Alice" }
  *   session.destroy();
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -1059,4 +1060,47 @@ export function sessionCookieToSend(
   const forwardedProto = Array.isArray(xfProto) ? xfProto[0] : xfProto;
   const socketEncrypted = (rawReq.socket as { encrypted?: boolean } | undefined)?.encrypted === true;
   return buildSessionCookie(newSid, ttl, undefined, forwardedProto, socketEncrypted);
+}
+
+// ── Form-token session (CSRF binding) ─────────────────────────────────
+/**
+ * The session of the request being dispatched, for CSRF form-token binding.
+ *
+ * Frond's form_token() reads it through the provider core registers
+ * (setFormTokenSessionProvider), so a token is bound to the session that
+ * rendered it. It lives in an AsyncLocalStorage, like the CSP nonce, so two
+ * requests interleaving on the one event loop never bind to each other's session.
+ */
+interface BindableSession {
+  getSessionId(): string | null;
+  isFresh(): boolean;
+  set(key: string, value: unknown): void;
+}
+
+const sessionStore = new AsyncLocalStorage<{ session: BindableSession | null }>();
+
+/** Run `fn` with a request scope the dispatcher publishes its session into. */
+export function runWithFormTokenSession<T>(fn: () => T): T {
+  return sessionStore.run({ session: null }, fn);
+}
+
+/** Publish the current request's session (no-op outside a request scope). */
+export function setFormTokenSession(session: BindableSession | null): void {
+  const store = sessionStore.getStore();
+  if (store) store.session = session;
+}
+
+/**
+ * The current request's session id, or "" outside a request.
+ *
+ * A session that holds nothing is sent no cookie, so the form's own POST would
+ * arrive under a newly minted id and fail its own token. Rendering a bound
+ * token therefore stores a marker, which makes the session persist.
+ */
+export function currentFormTokenSessionId(): string {
+  const session = sessionStore.getStore()?.session;
+  const sid = session?.getSessionId();
+  if (!session || !sid) return "";
+  if (session.isFresh()) session.set("_tina4_csrf", true);
+  return sid;
 }

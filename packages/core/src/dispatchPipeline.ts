@@ -41,8 +41,10 @@ import { gzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import type { Tina4Request } from "./types.js";
 import type { Session as SessionInstance } from "./session.js";
+import { setFormTokenSession } from "./session.js";
 import { Log } from "./logger.js";
 import { etagMatches } from "./etag.js";
+
 
 /**
  * The prologue, in order. Exported as DATA so the pipeline can be asserted and
@@ -405,6 +407,8 @@ export async function sessionAutoStart(
     return;
   }
   (req as any).session = sess;
+  // form_token() binds each token to this request's session (CSRF).
+  setFormTokenSession(sess);
 
   const origEnd = rawRes.end.bind(rawRes);
   // Finalise EXACTLY once. Under strict mode the save below re-throws, and the
