@@ -261,7 +261,7 @@ export class DatabaseResult implements Iterable<Record<string, unknown>> {
       const [size, decimals] = this._parseTypeSize(colType);
       return {
         name: col.name,
-        type: colType.replace(/\(.*\)/, ""),
+        type: colType.replace(/\([^)]*\)/, ""),
         size,
         decimals,
         nullable: col.nullable ?? true,

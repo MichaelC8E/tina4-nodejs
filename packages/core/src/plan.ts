@@ -90,9 +90,14 @@ function archiveDir(): string {
 }
 
 function slugify(title: string): string {
-  const slug = (title || "").trim().toLowerCase()
-    .replace(/[^A-Za-z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  const dashed = (title || "").trim().toLowerCase().replace(/[^A-Za-z0-9_-]+/g, "-");
+  // ReDoS-safe edge-dash strip: `/^-+|-+$/g`'s trailing `-+$` backtracks O(n^2)
+  // on a long dash run; a char scan is linear.
+  let a = 0;
+  let b = dashed.length;
+  while (a < b && dashed.charCodeAt(a) === 45) a++;
+  while (b > a && dashed.charCodeAt(b - 1) === 45) b--;
+  const slug = dashed.slice(a, b);
   return slug.slice(0, 80) || `plan-${Math.floor(Date.now() / 1000)}`;
 }
 

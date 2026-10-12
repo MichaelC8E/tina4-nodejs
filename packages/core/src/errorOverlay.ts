@@ -88,13 +88,15 @@ function parseStack(stack: string): StackFrame[] {
   const lines = stack.split("\n");
   for (const line of lines) {
     // Match: "    at functionName (file:line:col)"
-    let match = line.match(/^\s*at\s+(.+?)\s+\((.+?):(\d+):(\d+)\)/);
+    // ReDoS-safe: negated classes ([^(] func, [^)] file) + a literal space can't
+    // overlap the delimiters the way (.+?)\s+\( and (.+?):(\d+) did.
+    let match = line.match(/^\s*at\s+([^(]+?) \(([^)]+):(\d+):(\d+)\)/);
     if (match) {
       frames.push({ func: match[1], file: match[2], line: parseInt(match[3], 10), column: parseInt(match[4], 10) });
       continue;
     }
-    // Match: "    at file:line:col"
-    match = line.match(/^\s*at\s+(.+?):(\d+):(\d+)/);
+    // Match: "    at file:line:col" (ReDoS-safe: file is a non-space run)
+    match = line.match(/^\s*at\s+(\S+):(\d+):(\d+)/);
     if (match) {
       frames.push({ func: "{anonymous}", file: match[1], line: parseInt(match[2], 10), column: parseInt(match[3], 10) });
     }

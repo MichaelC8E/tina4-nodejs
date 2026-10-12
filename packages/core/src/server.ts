@@ -1079,7 +1079,10 @@ export function resolveHandlerArgs(
   routeParams: Record<string, unknown>,
 ): unknown[] {
   const fnStr = (handler as { toString(): string }).toString();
-  const argMatch = fnStr.match(/^(?:async\s*)?(?:function\s*\w*)?\s*\(([^)]*)\)/);
+  // ReDoS-safe: the old `(?:function\s*\w*)?\s*\(` had two `\s*` straddling `\w*`
+  // before `\(`, so whitespace could be split two ways (O(n^2)). A single
+  // optional name and one trailing `\s*` removes the ambiguity.
+  const argMatch = fnStr.match(/^(?:async\s*)?(?:function(?:\s+\w+)?\s*)?\(([^)]*)\)/);
   const argNames = argMatch?.[1]?.split(",").map((a: string) => a.trim().replace(/[:=].*/, "")) ?? [];
   const filteredArgs = argNames.filter((n: string) => n.length > 0);
   if (filteredArgs.length === 0) return [];

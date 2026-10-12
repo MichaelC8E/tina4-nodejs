@@ -440,6 +440,8 @@ function parseDisposition(headers: string): { name: string; filename?: string } 
 }
 
 function parsePartContentType(headers: string): string | null {
-  const match = headers.match(/Content-Type:\s*(.+?)(?:\r?\n|$)/i);
+  // ReDoS-safe: a negated class ([^\r\n]) for the value can't overlap the \r?\n
+  // terminator the way (.+?) did, and [ \t]* (not \s*) won't absorb the newline.
+  const match = headers.match(/Content-Type:[ \t]*([^\r\n]+?)(?:\r?\n|$)/i);
   return match?.[1]?.trim() ?? null;
 }
