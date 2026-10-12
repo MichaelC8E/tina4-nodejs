@@ -7,7 +7,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 */
 
 import type { RouteDefinition } from "../../core/src/index.js";
-import { trimSlashes } from "./slashTrim.js";
+import { trimSlashes } from "../../core/src/slashTrim.js";
 import type { ModelDefinition, FieldDefinition } from "../../orm/src/index.js";
 
 interface OpenAPISpecInfo {

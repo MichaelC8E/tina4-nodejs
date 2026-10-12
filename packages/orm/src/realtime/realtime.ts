@@ -7,7 +7,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 */
 
 import { createHmac } from "node:crypto";
-import { trimSlashes } from "../slashTrim.js";
+import { trimSlashes } from "../../../core/src/slashTrim.js";
 import {
   Router,
   HTTP_OK,

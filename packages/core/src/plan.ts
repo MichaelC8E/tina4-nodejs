@@ -18,6 +18,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
 import * as fs from "node:fs";
+import { trimChar } from "./slashTrim.js";
 import * as path from "node:path";
 
 const PLAN_DIR = "plan";
@@ -91,13 +92,7 @@ function archiveDir(): string {
 
 function slugify(title: string): string {
   const dashed = (title || "").trim().toLowerCase().replace(/[^A-Za-z0-9_-]+/g, "-");
-  // ReDoS-safe edge-dash strip: `/^-+|-+$/g`'s trailing `-+$` backtracks O(n^2)
-  // on a long dash run; a char scan is linear.
-  let a = 0;
-  let b = dashed.length;
-  while (a < b && dashed.charCodeAt(a) === 45) a++;
-  while (b > a && dashed.charCodeAt(b - 1) === 45) b--;
-  const slug = dashed.slice(a, b);
+  const slug = trimChar(dashed, 45); // ReDoS-safe edge-dash strip (45 = '-')
   return slug.slice(0, 80) || `plan-${Math.floor(Date.now() / 1000)}`;
 }
 

@@ -7,7 +7,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 */
 
 import type { Tina4Request, Tina4Response, RouteDefinition } from "../../core/src/index.js";
-import { rtrimSlashes } from "./slashTrim.js";
+import { rtrimSlashes } from "../../core/src/slashTrim.js";
 
 // The UI assets load from a CDN by default (a documented architecture decision —
 // we don't vendor ~1.4MB of swagger-ui-dist, to stay small). jsdelivr
