@@ -394,7 +394,7 @@ export function resolveAlgorithm(algorithm?: string): string {
 // ── Base64url helpers (RFC 7515) ──────────────────────────────────
 
 function base64urlEncode(data: Buffer): string {
-  return data.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return data.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/={1,2}$/, "");
 }
 
 function base64urlDecode(str: string): Buffer {

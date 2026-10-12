@@ -7,6 +7,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 */
 
 import type { RouteDefinition } from "../../core/src/index.js";
+import { trimSlashes } from "./slashTrim.js";
 import type { ModelDefinition, FieldDefinition } from "../../orm/src/index.js";
 
 interface OpenAPISpecInfo {
@@ -793,8 +794,7 @@ function inferModelFromPath(pattern: string): string | null {
  * distinct ids straight from the two distinct paths.
  */
 function operationIdBase(method: string, openApiPath: string): string {
-  const clean = openApiPath
-    .replace(/^\/+|\/+$/g, "")   // strip leading/trailing slashes (Python .strip("/"))
+  const clean = trimSlashes(openApiPath)   // strip leading/trailing slashes (ReDoS-safe)
     .replace(/\//g, "_")          // internal slash -> underscore
     .replace(/\.\.\./g, "")       // catch-all '...' inside braces -> nothing ({...slug} -> slug)
     .replace(/[{}]/g, "")         // drop braces

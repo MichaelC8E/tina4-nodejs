@@ -7,6 +7,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 */
 
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
+import { trimSlashes } from "./slashTrim.js";
 import { createTina4HttpServer, guardUnsafeHeaders, sendTransportRejection } from "./transport.js";
 import { randomBytes } from "node:crypto";
 import { resolve, dirname, join, relative } from "node:path";
@@ -661,7 +662,7 @@ export function resetTemplateCache(): void {
 export function resolveTemplate(pathname: string, templatesDir: string): string | null {
   if (!templateAutoRoutingEnabled()) return null;
 
-  const cleanPath = pathname.replace(/^\/+/, "").replace(/\/+$/, "") || "index";
+  const cleanPath = trimSlashes(pathname) || "index";
   const isDev = (process.env.TINA4_DEBUG ?? "false").toLowerCase() === "true";
 
   if (isDev) {

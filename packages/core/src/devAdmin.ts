@@ -18,6 +18,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
 import { cpus as osCpus } from "node:os";
+import { rtrimSlashes } from "./slashTrim.js";
 import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, copyFileSync, statSync, openSync, closeSync, fstatSync, fchmodSync, ftruncateSync, constants, realpathSync, lstatSync } from "node:fs";
 import { join, dirname, resolve, relative, sep, basename } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1636,7 +1637,7 @@ const handleTool: RouteHandler = (req, res) => {
  *   4. Fallback `http://127.0.0.1:9145` — matches standalone `tina4 agent`.
  */
 export function supervisorBaseUrl(): string {
-  const explicit = (process.env.TINA4_SUPERVISOR_URL ?? "").replace(/\/+$/, "");
+  const explicit = rtrimSlashes(process.env.TINA4_SUPERVISOR_URL ?? "");
   if (explicit) return explicit;
   const agentPort = (process.env.TINA4_AGENT_PORT ?? "").trim();
   if (/^\d+$/.test(agentPort)) return `http://127.0.0.1:${parseInt(agentPort, 10)}`;
@@ -2363,7 +2364,7 @@ async function devGitInfo(root: string): Promise<{ branch: string; gitRoot: stri
     const branch = (git(["rev-parse", "--abbrev-ref", "HEAD"]) ?? "").trim();
     const topRaw = git(["rev-parse", "--show-toplevel"]);
     const gitRoot = topRaw && topRaw.trim() !== ""
-      ? topRaw.trim().replace(/\\/g, "/").replace(/\/+$/, "")
+      ? rtrimSlashes(topRaw.trim().replace(/\\/g, "/"))
       : null;
     const status = new Map<string, string>();
     const porcelain = git(["status", "--porcelain", "-uall"]);

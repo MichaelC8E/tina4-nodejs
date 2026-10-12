@@ -70,7 +70,7 @@ function encodeBase64Url(value: Uint8Array): string {
   return Buffer.from(value).toString("base64")
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
-    .replace(/=+$/g, "");
+    .replace(/={1,2}$/, "");
 }
 
 function decodeBase64Url(value: string, name: string): Buffer {

@@ -8,6 +8,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 /** Zero-dependency app-facing AI client (ADR-0053 + ADR-0060). */
 import http, { type IncomingMessage } from "node:http";
+import { rtrimSlashes } from "./slashTrim.js";
 import https from "node:https";
 import { parseLineStream, parseSseStream, type SseEvent } from "./api.js";
 
@@ -319,7 +320,7 @@ export class Ai {
     let url: URL;
     try { url = new URL(value); } catch { throw new AiConfigError("AI URL must be an http or https URL"); }
     if (url.protocol !== "http:" && url.protocol !== "https:") throw new AiConfigError("AI URL must be an http or https URL");
-    const path = url.pathname.replace(/\/+$/, "");
+    const path = rtrimSlashes(url.pathname);
     // "/v1beta/openai" is Gemini's OpenAI-compatible base; append the suffix onto it exactly as
     // onto a bare host / "/v1" / "/api", so the default gemini base resolves to
     // .../v1beta/openai/chat/completions (or /embeddings). A full endpoint URL the caller supplies

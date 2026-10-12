@@ -7,6 +7,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 */
 
 import { createHmac } from "node:crypto";
+import { trimSlashes } from "../slashTrim.js";
 import {
   Router,
   HTTP_OK,
@@ -87,7 +88,7 @@ let _authorize: RealtimeOptions["authorize"] | undefined;
  */
 export async function realtime(options: RealtimeOptions = {}): Promise<Record<string, string>> {
   const features = options.features ?? ["calls"];
-  const raw = (options.prefix ?? "").replace(/^\/+|\/+$/g, "");
+  const raw = trimSlashes(options.prefix ?? "");
   const p = raw ? `/${raw}` : "";
   _authorize = options.authorize;
 

@@ -22,6 +22,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
  * zero-dependency node:http / node:https core.
  */
 import http from "node:http";
+import { rtrimSlashes } from "./slashTrim.js";
 import https from "node:https";
 import { URL } from "node:url";
 import { randomBytes } from "node:crypto";
@@ -494,7 +495,7 @@ export class Api {
         authHeaderOrOptions: string | ApiOptions = "",
         timeout: number = 30
     ) {
-        this.baseUrl = baseUrl.replace(/\/+$/, "");
+        this.baseUrl = rtrimSlashes(baseUrl);
         this.headers = {};
         // Retry defaults: off (0) so existing callers are unaffected.
         this.maxRetries = 0;
