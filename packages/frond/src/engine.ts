@@ -1835,6 +1835,19 @@ export function setFormTokenSessionId(sessionId: string): void {
   _formTokenSessionId = sessionId || "";
 }
 
+// Form-token session provider. Core registers its request-scoped session id
+// source here, for the same reason as the CSP nonce provider below. Default
+// returns "" for standalone Frond use.
+let _formTokenSessionProvider: () => string = () => "";
+
+/**
+ * Register the function that gives form_token() the current request's session
+ * id, so each token is bound to the session that rendered it (CSRF).
+ */
+export function setFormTokenSessionProvider(fn: () => string): void {
+  _formTokenSessionProvider = fn;
+}
+
 // CSP nonce provider (ADR-0088). Frond never imports @tina4/core (that would be
 // circular — core depends on frond), so core injects the per-response nonce
 // source through this setter. Default returns "" for standalone Frond use.
@@ -1885,8 +1898,9 @@ function _buildFormTokenJwt(descriptor: string = ""): string {
   }
 
   // Include session_id for CSRF session binding
-  if (_formTokenSessionId) {
-    payload.session_id = _formTokenSessionId;
+  const sessionId = _formTokenSessionProvider() || _formTokenSessionId;
+  if (sessionId) {
+    payload.session_id = sessionId;
   }
 
   const h = _b64url(Buffer.from(JSON.stringify(header)));
