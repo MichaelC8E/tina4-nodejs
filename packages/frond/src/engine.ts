@@ -318,10 +318,15 @@ const THOUSANDS_RE = /\B(?=(\d{3})+(?!\d))/g;
 const LIVE_RE = /^live\s+["']([^"']+)["']([\s\S]*)$/;
 const LIVE_WS_RE = /ws\s+["']([^"']+)["']/;
 const LIVE_SRC_RE = /src\s+["']([^"']+)["']/;
-const EXTENDS_RE = /\{%[-\s]*extends\s+["'](.+?)["']\s*[-]?%\}/;
+// The captured path is a single negated class ([^"']+), not .+?, for the same
+// reason LIVE_RE above uses one: V8 backtracks a lazy dot catastrophically when
+// the closing quote never arrives, so `{% extends "` + 100KB of junk would hang
+// the render (js/polynomial-redos). A template path never carries a quote, so
+// the class loses nothing and the match is linear.
+const EXTENDS_RE = /\{%[-\s]*extends\s+["']([^"']+)["']\s*[-]?%\}/;
 // Global-flag twin of EXTENDS_RE purely for counting every occurrence (a
 // non-global RegExp's .exec()/.match() only ever reports the first match).
-const EXTENDS_RE_GLOBAL = /\{%[-\s]*extends\s+["'](.+?)["']\s*[-]?%\}/g;
+const EXTENDS_RE_GLOBAL = /\{%[-\s]*extends\s+["']([^"']+)["']\s*[-]?%\}/g;
 
 /** Escape a value for a live-marker HTML attribute. Byte-identical order to
  * the Python master / PHP liveAttr / Ruby live_attr so the emitted marker

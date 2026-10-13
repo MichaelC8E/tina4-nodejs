@@ -77,6 +77,22 @@ const jwt = (tokEl.match(/value="([^"]+)"/) || [])[1] || "";
 assert("form_token emits a 3-part JWT", jwt.split(".").length === 3);
 assert("JWT base64url segments carry no '=' padding", jwt.length > 0 && !jwt.includes("="));
 
+// ── {% extends %} path capture (.+? -> [^"']+) ──
+// The extends path matcher used a lazy `(.+?)` between the quotes. An opener
+// with a quote and no closer -- `{% extends "` + a long junk run -- made V8
+// backtrack the lazy dot catastrophically (js/polynomial-redos). The negated
+// class [^"']+ is linear; these bite because the old form ran for seconds.
+assert("{% extends unterminated quote stays linear", rendersUnderBound('{% extends "' + "a".repeat(200_000)));
+assert("{% extends junk then no close stays linear", rendersUnderBound('{% extends "' + "x ".repeat(100_000) + "%}"));
+// Correctness: the matcher still finds extends tags. Two of them must throw the
+// multi-extends guard, which only fires when EXTENDS_RE_GLOBAL matched BOTH
+// occurrences -- so this proves the negated-class capture still recognises the
+// tag (independent of any on-disk base template).
+let doubleExtendsThrew = "";
+try { f.renderString('{% extends "a.twig" %}{% extends "b.twig" %}', {}); }
+catch (e) { doubleExtendsThrew = String(e); }
+assert("{% extends %} still matched (2 tags -> guard throws)", doubleExtendsThrew.includes('2 "{% extends %}" tags'));
+
 console.log("\n==================================================");
 console.log(`  Results: ${passed === 0 && failed === 0 ? "none" : ""}\x1b[32m${passed} passed\x1b[0m, \x1b[31m${failed} failed\x1b[0m`);
 console.log("==================================================");
