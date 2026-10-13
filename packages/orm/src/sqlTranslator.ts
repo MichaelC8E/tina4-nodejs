@@ -437,7 +437,7 @@ export class SQLTranslator {
    * → { sql: "INSERT INTO t (x) VALUES (1)", columns: ["id", "name"] }
    */
   static parseReturning(sql: string): { sql: string; columns: string[] } {
-    const m = sql.match(/\bRETURNING\s+(.+)$/i);
+    const m = sql.match(/\bRETURNING\s+(\S.*)$/i);
     if (!m) return { sql, columns: [] };
     const columns = m[1].split(",").map((c) => c.trim());
     return {
@@ -496,7 +496,10 @@ export class SQLTranslator {
   // start of the VALUES group rather than by hunting for a parenthesis (the
   // column list has parentheses too).
   private static readonly INSERT_VALUES =
-    /^\s*INSERT\s+INTO\s+.+?\s+VALUES\s*\(([^()]*)\)\s*$/dis;
+    // ReDoS-safe: the table ref matches `\S(?:[\s\S]*?\S)?` (bounded by non-space
+    // at both ends) so the separator `\s+` before VALUES can't overlap it the way
+    // the old `.+?\s+` did (polynomial on `INSERT INTO ` + a long space run).
+    /^\s*INSERT\s+INTO\s+\S(?:[\s\S]*?\S)?\s+VALUES\s*\(([^()]*)\)\s*$/dis;
 
   /**
    * Engines whose lastInsertId reports the FIRST generated id of a multi-row

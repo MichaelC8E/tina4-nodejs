@@ -7,6 +7,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 */
 
 import type { Tina4Request, Tina4Response, RouteDefinition } from "../../core/src/index.js";
+import { rtrimSlashes } from "../../core/src/slashTrim.js";
 
 // The UI assets load from a CDN by default (a documented architecture decision —
 // we don't vendor ~1.4MB of swagger-ui-dist, to stay small). jsdelivr
@@ -15,7 +16,7 @@ import type { Tina4Request, Tina4Response, RouteDefinition } from "../../core/sr
 // splitting jsdelivr/unpkg. Air-gapped deployments point TINA4_SWAGGER_UI_CDN
 // at a self-hosted mirror (a base URL serving swagger-ui.css + swagger-ui-bundle.js).
 function swaggerUiCdn(): string {
-  return (process.env.TINA4_SWAGGER_UI_CDN ?? "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5").replace(/\/+$/, "");
+  return rtrimSlashes(process.env.TINA4_SWAGGER_UI_CDN ?? "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5");
 }
 
 // The inline <style> and the inline SwaggerUIBundle(...) <script> carry this
