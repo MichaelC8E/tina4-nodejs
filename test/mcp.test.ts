@@ -559,6 +559,161 @@ console.log("\n=== Security Tests ===\n");
   }
 }
 
+// test_file_write_symlink_sandbox: a write through a symlink out of the project
+for (const [label, tool, args] of [
+  ["a new file in a linked dir", "file_write", { path: "linkdir/planted.txt", content: "PWNED" }],
+  ["a new subdir in a linked dir", "file_write", { path: "linkdir/sub/planted.txt", content: "PWNED" }],
+  ["a dangling link", "file_write", { path: "dangle.txt", content: "PWNED" }],
+  ["an asset under a linked dir", "asset_upload", { filename: "pub/planted.txt", content: "PWNED" }],
+] as const) {
+  const lab = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-test-link-"));
+  fs.mkdirSync(path.join(lab, "proj", "src", "public"), { recursive: true });
+  fs.mkdirSync(path.join(lab, "outside"));
+  fs.symlinkSync(path.join(lab, "outside"), path.join(lab, "proj", "linkdir"));
+  fs.symlinkSync(path.join(lab, "outside", "dangle.txt"), path.join(lab, "proj", "dangle.txt"));
+  fs.symlinkSync(path.join(lab, "outside"), path.join(lab, "proj", "src", "public", "pub"));
+  const origCwd = process.cwd();
+  process.chdir(path.join(lab, "proj"));
+  try {
+    const server = new McpServer("/test-sandbox-link", "Sandbox Link Test");
+    registerDevTools(server);
+
+    const resp = JSON.parse(
+      await server.handleMessage({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: tool, arguments: args },
+      }),
+    );
+    assert(
+      `${tool} sandbox blocks a symlink out of the project (${label})`,
+      resp.error !== undefined && fs.readdirSync(path.join(lab, "outside")).length === 0,
+    );
+  } finally {
+    process.chdir(origCwd);
+    fs.rmSync(lab, { recursive: true, force: true });
+  }
+}
+
+// test_file_write_dangling_link: judged by where the link points
+for (const [label, link, allowed] of [
+  ["a dangling link to a new file inside the project", "data/real.txt", true],
+  ["a dangling link that climbs out through a linked dir", "linkdir/../planted.txt", false],
+  ["a dangling link in a loop", "alias.txt", false],
+] as const) {
+  const lab = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-test-dangle-"));
+  fs.mkdirSync(path.join(lab, "proj", "data"), { recursive: true });
+  fs.mkdirSync(path.join(lab, "outside", "deep"), { recursive: true });
+  fs.symlinkSync(path.join(lab, "outside", "deep"), path.join(lab, "proj", "linkdir"));
+  fs.symlinkSync(link, path.join(lab, "proj", "alias.txt"));
+  const origCwd = process.cwd();
+  process.chdir(path.join(lab, "proj"));
+  try {
+    const server = new McpServer("/test-sandbox-dangle", "Sandbox Dangle Test");
+    registerDevTools(server);
+    const resp = JSON.parse(
+      await server.handleMessage({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "file_write", arguments: { path: "alias.txt", content: "WRITTEN" } },
+      }),
+    );
+    const landedInside = fs.existsSync(path.join(lab, "proj", "data", "real.txt"));
+    const landedOutside = fs.existsSync(path.join(lab, "outside", "planted.txt"));
+    assert(
+      `file_write ${allowed ? "follows" : "refuses"} ${label}`,
+      allowed
+        ? resp.error === undefined && landedInside
+        : String(resp.error?.message ?? "").includes("escapes project directory") && !landedOutside,
+    );
+  } finally {
+    process.chdir(origCwd);
+    fs.rmSync(lab, { recursive: true, force: true });
+  }
+}
+
+// test_file_patch_symlink_sandbox: a patch through a symlink out of the project
+{
+  const lab = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-test-patch-link-"));
+  fs.mkdirSync(path.join(lab, "proj"), { recursive: true });
+  fs.mkdirSync(path.join(lab, "outside"));
+  fs.writeFileSync(path.join(lab, "outside", "victim.txt"), "ORIGINAL");
+  fs.symlinkSync(path.join(lab, "outside"), path.join(lab, "proj", "linkdir"));
+  const origCwd = process.cwd();
+  process.chdir(path.join(lab, "proj"));
+  try {
+    const server = new McpServer("/test-sandbox-patch-link", "Sandbox Patch Link Test");
+    registerDevTools(server);
+    await server.handleMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "file_patch", arguments: { path: "linkdir/victim.txt", old_string: "ORIGINAL", new_string: "PWNED" } },
+    });
+    assert(
+      "file_patch sandbox blocks a symlink out of the project",
+      fs.readFileSync(path.join(lab, "outside", "victim.txt"), "utf-8") === "ORIGINAL",
+    );
+  } finally {
+    process.chdir(origCwd);
+    fs.rmSync(lab, { recursive: true, force: true });
+  }
+}
+
+// test_project_dir_gone: a project directory that no longer exists
+{
+  const root = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "mcp-test-gone-")), "proj");
+  fs.mkdirSync(root);
+  const origCwd = process.cwd();
+  process.chdir(root);
+  const server = new McpServer("/test-sandbox-gone", "Sandbox Gone Test");
+  try {
+    registerDevTools(server);
+  } finally {
+    process.chdir(origCwd);
+  }
+  fs.rmSync(root, { recursive: true, force: true });
+  const resp = JSON.parse(
+    await server.handleMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "file_list", arguments: { path: "." } },
+    }),
+  );
+  assert("file_list on a project directory that no longer exists is not a protocol error", resp.error === undefined,
+    JSON.stringify(resp.error));
+}
+
+// test_file_write_new_nested_dir (inside project)
+{
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-test-nested-"));
+  const origCwd = process.cwd();
+  process.chdir(tmpDir);
+  try {
+    const server = new McpServer("/test-sandbox-nested", "Sandbox Nested Test");
+    registerDevTools(server);
+
+    const resp = JSON.parse(
+      await server.handleMessage({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "file_write", arguments: { path: "notes/deep/ok.txt", content: "fine" } },
+      }),
+    );
+    assert(
+      "file_write allows a new nested directory inside the project",
+      resp.error === undefined && fs.readFileSync(path.join(tmpDir, "notes", "deep", "ok.txt"), "utf-8") === "fine",
+    );
+  } finally {
+    process.chdir(origCwd);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 // test_file_read_valid (inside project)
 {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-test-valid-"));

@@ -866,24 +866,58 @@ function safePath(projectRoot: string, relPath: string): string {
   if (resolved !== projectRoot && !resolved.startsWith(rootPrefix)) {
     throw new Error(`Path escapes project directory: ${relPath}`);
   }
-  // Belt-and-braces against symlink escapes: if the path exists, canonicalise
-  // it and re-check containment. A symlink inside the tree pointing outside
-  // would otherwise slip past the textual check. New paths (parent not yet
-  // created) have no realpath and rely on the resolve() containment above.
-  let real: string | null = null;
+  // Belt-and-braces against symlink escapes: canonicalise the path and
+  // re-check containment. A symlink inside the tree pointing outside would
+  // otherwise slip past the textual check.
+  let realRoot: string;
   try {
-    real = fs.realpathSync(resolved);
+    realRoot = fs.realpathSync(projectRoot);
   } catch {
-    real = null; // not created yet — textual guard above holds
+    return resolved; // a root that no longer exists holds nothing to link through
   }
-  if (real !== null) {
-    const realRoot = fs.realpathSync(projectRoot);
-    const realPrefix = realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep;
-    if (real !== realRoot && !real.startsWith(realPrefix)) {
-      throw new Error(`Path escapes project directory: ${relPath}`);
-    }
+  const real = realPathOf(resolved);
+  const realPrefix = realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep;
+  if (real === null || (real !== realRoot && !real.startsWith(realPrefix))) {
+    throw new Error(`Path escapes project directory: ${relPath}`);
   }
   return resolved;
+}
+
+/**
+ * Where a path will land once every symlink in it is followed, including the
+ * parts that do not exist yet: a NEW file is created through its deepest
+ * existing parent, and a dangling symlink through the place it names. Null when
+ * that cannot be worked out (a link loop, an unreadable link).
+ */
+function realPathOf(p: string, hops = 0): string | null {
+  let probe = p;
+  while (!fs.existsSync(probe) && !isSymlink(probe) && path.dirname(probe) !== probe) {
+    probe = path.dirname(probe);
+  }
+  try {
+    // .native: the JS realpathSync collapses "link/.." as text first.
+    return fs.realpathSync.native(probe);
+  } catch {
+    // A dangling symlink. Its target is joined as text, not normalised, so a
+    // ".." after a linked component is resolved the way the OS will follow it.
+    if (hops >= 40) return null;
+    let target: string;
+    try {
+      target = fs.readlinkSync(probe);
+    } catch {
+      return null;
+    }
+    const base = path.isAbsolute(target) ? target : path.dirname(probe) + path.sep + target;
+    return realPathOf(base + p.slice(probe.length), hops + 1);
+  }
+}
+
+function isSymlink(p: string): boolean {
+  try {
+    return fs.lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -1959,8 +1993,10 @@ export function registerDevTools(server: McpServer): void {
         // 2. Coder-path normalization.
         rel = normalizeCoderPath(projectRoot, rel);
         // 3. Safe path resolution (sandbox check).
-        const resolved = path.resolve(projectRoot, rel);
-        if (!resolved.startsWith(projectRoot)) {
+        let resolved: string;
+        try {
+          resolved = safePath(projectRoot, rel);
+        } catch {
           return { error: `Path escapes project directory: ${rel}` };
         }
         // 4. Existence check.
