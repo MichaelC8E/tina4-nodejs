@@ -18,6 +18,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
 import { cpus as osCpus } from "node:os";
+import { rtrimSlashes } from "./slashTrim.js";
 import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, copyFileSync, statSync, openSync, closeSync, fstatSync, fchmodSync, ftruncateSync, constants, realpathSync, lstatSync } from "node:fs";
 import { join, dirname, resolve, relative, sep, basename } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -830,6 +831,7 @@ export class DevAdmin {
       { method: "GET", pattern: "/__dev/api/docs/.well-known.json", handler: handleDocsWellKnown },
       // JS asset
       { method: "GET", pattern: "/__dev/js/tina4-dev-admin.min.js", handler: handleDevAdminJs },
+      { method: "GET", pattern: "/__dev/split", handler: handleDevAdminSplit },
       // Dev-toolbar assets — served as external CSS/JS so the injected toolbar is
       // CSP-clean (no inline style=, onclick=, or <script>) under a strict
       // `default-src 'self'`. Parity with PHP's /__dev/toolbar.css + toolbar.js.
@@ -1635,7 +1637,7 @@ const handleTool: RouteHandler = (req, res) => {
  *   4. Fallback `http://127.0.0.1:9145` — matches standalone `tina4 agent`.
  */
 export function supervisorBaseUrl(): string {
-  const explicit = (process.env.TINA4_SUPERVISOR_URL ?? "").replace(/\/+$/, "");
+  const explicit = rtrimSlashes(process.env.TINA4_SUPERVISOR_URL ?? "");
   if (explicit) return explicit;
   const agentPort = (process.env.TINA4_AGENT_PORT ?? "").trim();
   if (/^\d+$/.test(agentPort)) return `http://127.0.0.1:${parseInt(agentPort, 10)}`;
@@ -2362,7 +2364,7 @@ async function devGitInfo(root: string): Promise<{ branch: string; gitRoot: stri
     const branch = (git(["rev-parse", "--abbrev-ref", "HEAD"]) ?? "").trim();
     const topRaw = git(["rev-parse", "--show-toplevel"]);
     const gitRoot = topRaw && topRaw.trim() !== ""
-      ? topRaw.trim().replace(/\\/g, "/").replace(/\/+$/, "")
+      ? rtrimSlashes(topRaw.trim().replace(/\\/g, "/"))
       : null;
     const status = new Map<string, string>();
     const porcelain = git(["status", "--porcelain", "-uall"]);
@@ -3137,6 +3139,38 @@ const handleDevAdminJs: RouteHandler = async (_req, res) => {
   // File not found — no legacy fallback
   res.raw.writeHead(404, { "Content-Type": "text/plain" });
   res.raw.end("tina4-dev-admin.min.js not found");
+};
+
+// ---------------------------------------------------------------------------
+// Dev Admin split view — the shared asset (same file python/php/ruby serve)
+// ---------------------------------------------------------------------------
+
+const handleDevAdminSplit: RouteHandler = async (_req, res) => {
+  const { readFileSync, existsSync } = await import("node:fs");
+  const { dirname, join, resolve } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const dir = dirname(fileURLToPath(import.meta.url));
+
+  const candidates = [
+    join(dir, "..", "public", "js", "tina4-dev-admin-split.html"),
+    join(dir, "..", "..", "public", "js", "tina4-dev-admin-split.html"),
+    resolve(process.cwd(), "node_modules", "tina4-nodejs", "packages", "core", "public", "js", "tina4-dev-admin-split.html"),
+    resolve(process.cwd(), "public", "js", "tina4-dev-admin-split.html"),
+  ];
+
+  for (const path of candidates) {
+    if (existsSync(path)) {
+      try {
+        const content = readFileSync(path, "utf-8");
+        res.raw.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
+        res.raw.end(content);
+        return;
+      } catch { /* try next */ }
+    }
+  }
+
+  res.raw.writeHead(404, { "Content-Type": "text/plain" });
+  res.raw.end("tina4-dev-admin-split.html not found");
 };
 
 // ---------------------------------------------------------------------------

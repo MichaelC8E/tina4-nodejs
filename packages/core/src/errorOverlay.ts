@@ -87,16 +87,25 @@ function parseStack(stack: string): StackFrame[] {
   const frames: StackFrame[] = [];
   const lines = stack.split("\n");
   for (const line of lines) {
-    // Match: "    at functionName (file:line:col)"
-    let match = line.match(/^\s*at\s+(.+?)\s+\((.+?):(\d+):(\d+)\)/);
-    if (match) {
-      frames.push({ func: match[1], file: match[2], line: parseInt(match[3], 10), column: parseInt(match[4], 10) });
-      continue;
+    // ReDoS-safe parse by string ops: a V8 frame is "at <func> (<loc>)" or
+    // "at <loc>", and <loc> ends in ":line:col". Splitting on the last " (" and
+    // matching ":(\d+):(\d+)$" (digits and ':' are disjoint, anchored at the end)
+    // has no ambiguous quantifier for CodeQL to flag, unlike the old /(.+?)\s+\(/.
+    const t = line.trim();
+    if (!t.startsWith("at ")) continue;
+    const rest = t.slice(3);
+    let func = "{anonymous}";
+    let loc = rest;
+    if (rest.endsWith(")")) {
+      const open = rest.lastIndexOf(" (");
+      if (open >= 0) {
+        func = rest.slice(0, open);
+        loc = rest.slice(open + 2, -1);
+      }
     }
-    // Match: "    at file:line:col"
-    match = line.match(/^\s*at\s+(.+?):(\d+):(\d+)/);
-    if (match) {
-      frames.push({ func: "{anonymous}", file: match[1], line: parseInt(match[2], 10), column: parseInt(match[3], 10) });
+    const lc = loc.match(/:(\d+):(\d+)$/);
+    if (lc && lc.index !== undefined) {
+      frames.push({ func, file: loc.slice(0, lc.index), line: parseInt(lc[1], 10), column: parseInt(lc[2], 10) });
     }
   }
   return frames;

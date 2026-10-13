@@ -23,6 +23,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 // Built-in dev tools auto-register when TINA4_DEBUG=true and running on localhost.
 
 import * as fs from "node:fs";
+import { rtrimSlashes } from "./slashTrim.js";
 import * as path from "node:path";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
@@ -356,7 +357,7 @@ export class McpServer {
   private _sseChannels: Map<string, { buffer: string[]; wake: (() => void) | null }> = new Map();
 
   constructor(mcpPath: string, name = "Tina4 MCP", version = "1.0.0") {
-    this.path = mcpPath.replace(/\/+$/, "");
+    this.path = rtrimSlashes(mcpPath);
     this.name = name;
     this.version = version;
     McpServer._instances.push(this);

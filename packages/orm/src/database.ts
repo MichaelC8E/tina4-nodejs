@@ -27,7 +27,7 @@ import { quoteIdentifierAnsi, assertColumnNames } from "./adapters/sqlDialect.js
  */
 export function stripTrailingSemicolons(sql: string): string {
   if (!sql) return sql;
-  let stripped = sql.replace(/\s+$/, "");
+  let stripped = sql.trimEnd();
   while (stripped.endsWith(";")) {
     stripped = stripped.slice(0, -1).replace(/\s+$/, "");
   }

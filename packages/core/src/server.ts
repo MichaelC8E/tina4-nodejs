@@ -7,6 +7,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 */
 
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
+import { trimSlashes } from "./slashTrim.js";
 import { createTina4HttpServer, guardUnsafeHeaders, sendTransportRejection } from "./transport.js";
 import { randomBytes } from "node:crypto";
 import { resolve, dirname, join, relative } from "node:path";
@@ -661,7 +662,7 @@ export function resetTemplateCache(): void {
 export function resolveTemplate(pathname: string, templatesDir: string): string | null {
   if (!templateAutoRoutingEnabled()) return null;
 
-  const cleanPath = pathname.replace(/^\/+/, "").replace(/\/+$/, "") || "index";
+  const cleanPath = trimSlashes(pathname) || "index";
   const isDev = (process.env.TINA4_DEBUG ?? "false").toLowerCase() === "true";
 
   if (isDev) {
@@ -1078,7 +1079,10 @@ export function resolveHandlerArgs(
   routeParams: Record<string, unknown>,
 ): unknown[] {
   const fnStr = (handler as { toString(): string }).toString();
-  const argMatch = fnStr.match(/^(?:async\s*)?(?:function\s*\w*)?\s*\(([^)]*)\)/);
+  // ReDoS-safe: the old `(?:function\s*\w*)?\s*\(` had two `\s*` straddling `\w*`
+  // before `\(`, so whitespace could be split two ways (O(n^2)). A single
+  // optional name and one trailing `\s*` removes the ambiguity.
+  const argMatch = fnStr.match(/^(?:async\s*)?(?:function(?:\s+\w+)?\s*)?\(([^)]*)\)/);
   const argNames = argMatch?.[1]?.split(",").map((a: string) => a.trim().replace(/[:=].*/, "")) ?? [];
   const filteredArgs = argNames.filter((n: string) => n.length > 0);
   if (filteredArgs.length === 0) return [];

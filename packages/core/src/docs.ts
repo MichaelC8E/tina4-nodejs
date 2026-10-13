@@ -199,12 +199,14 @@ function relativePath(absPath: string, projectRoot: string, frameworkRoots: stri
   return norm;
 }
 
-const CAMEL_SPLIT = /([a-z0-9])([A-Z])|([A-Z]+)([A-Z][a-z])/g;
-
+// ReDoS-safe camel-split. The old `([A-Z]+)([A-Z][a-z])` let `[A-Z]+` and the
+// following `[A-Z]` both consume uppercase, so a long run of capitals backtracked
+// O(n^2). A zero-width lookahead marks the acronym->word boundary in one pass.
 function tokenise(text: string): string[] {
   if (!text) return [];
   const expanded = text
-    .replace(CAMEL_SPLIT, (_m, a, b, c, d) => (a ? `${a} ${b}` : `${c} ${d}`))
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")      // fooBar -> foo Bar
+    .replace(/([A-Z])(?=[A-Z][a-z])/g, "$1 ")    // HTTPSConn -> HTTPS Conn
     .toLowerCase();
   return expanded
     .split(/[\s_\-./:,;()\[\]{}\\]+/)

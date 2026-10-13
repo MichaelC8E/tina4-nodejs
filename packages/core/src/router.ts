@@ -7,6 +7,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 */
 
 import type { RouteHandler, RouteDefinition, RouteMeta, Middleware, MiddlewareSpec, Tina4Request, Tina4Response, WebSocketRouteHandler, WebSocketRouteDefinition } from "./types.js";
+import { trimSlashes, rtrimSlashes } from "./slashTrim.js";
 import { isTruthy } from "./dotenv.js";
 import { MiddlewareRunner, isMiddlewareClass } from "./middleware.js";
 
@@ -63,7 +64,7 @@ function coerceParam(raw: string, type: string | undefined): string | number {
  */
 function joinGroupPath(prefix: string, path: string): string {
   const full = `${prefix}/${path.replace(/^\/+/, "")}`;
-  const trimmed = `/${full.replace(/^\/+|\/+$/g, "")}`;
+  const trimmed = `/${trimSlashes(full)}`;
   return trimmed.replace(/\/+/g, "/");
 }
 
@@ -369,7 +370,7 @@ export class Router {
         path.length > 1 &&
         path.endsWith("/")
       ) {
-        const stripped = path.replace(/\/+$/, "");
+        const stripped = rtrimSlashes(path);
         if (stripped.length > 0) {
           const retry = this.matchRoute(routes, stripped);
           if (retry) return retry;
